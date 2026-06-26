@@ -3,6 +3,7 @@ import {
   "moonbitlang/x/crypto",
   "moonbitlang/x/json5",
   "moonbitlang/core/json",
+  "moonbitlang/core/bigint",
   "moonbitlang/x/encoding",
 }
 

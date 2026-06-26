@@ -15,15 +15,15 @@ version = "0.1.0"
 
 readme = "README.mbt.md"
 
-repository = ""
+repository = "https://github.com/RabitLogic/mjwt"
 
 license = "Apache-2.0"
 
-keywords = []
+keywords = [ "jwt", "json-web-token", "crypto", "hmac", "rsa", "ecdsa" ]
 
 preferred_target = "wasm-gc"
 
-description = ""
+description = "A JWT (JSON Web Token) library for MoonBit with extensible trait-based signers"
 
 import {
   "moonbitlang/x@0.4.46",

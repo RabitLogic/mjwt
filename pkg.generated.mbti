@@ -1,0 +1,156 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "RabitLogic/mjwt"
+
+import {
+  "moonbitlang/core/bigint",
+  "moonbitlang/core/debug",
+  "moonbitlang/x/crypto",
+}
+
+// Values
+pub fn decode(StringView, String) -> JwtToken raise JwtError
+
+pub fn[V : JwtVerifier] decode_with(V, StringView) -> JwtToken raise JwtError
+
+pub fn decode_without_verify(StringView) -> JwtToken raise JwtError
+
+pub fn encode(JwtClaims, String) -> String raise JwtError
+
+pub fn[S : JwtSigner] encode_with(S, JwtClaims) -> String raise JwtError
+
+pub fn sha384(BytesView) -> FixedArray[Byte]
+
+pub fn sha512(BytesView) -> FixedArray[Byte]
+
+pub fn verify(StringView, String) -> Bool
+
+// Errors
+pub suberror JwtError {
+  InvalidFormat(String)
+  InvalidBase64(String)
+  InvalidJson(String)
+  InvalidUtf8(String)
+  InvalidHeader(String)
+  SignatureMismatch
+  UnsupportedAlgorithm(String)
+  CryptoError(String)
+} derive(Eq, @debug.Debug)
+pub fn JwtError::to_string(Self) -> String
+
+// Types and methods
+pub struct EcSigner {
+  private_key : Scalar256
+  public_key_x : Scalar256
+  public_key_y : Scalar256
+}
+pub fn EcSigner::new_p256(BytesView, BytesView) -> Self raise JwtError
+pub impl JwtSigner for EcSigner
+
+pub struct EcVerifier {
+  public_key_x : Scalar256
+  public_key_y : Scalar256
+}
+pub fn EcVerifier::new_p256(BytesView) -> Self raise JwtError
+pub impl JwtVerifier for EcVerifier
+
+pub struct HmacSigner {
+  alg_name : String
+  key : Bytes
+}
+pub fn HmacSigner::new(String, StringView) -> Self raise JwtError
+pub impl JwtSigner for HmacSigner
+
+pub struct HmacVerifier {
+  alg_name : String
+  key : Bytes
+}
+pub fn HmacVerifier::new(String, StringView) -> Self raise JwtError
+pub impl JwtVerifier for HmacVerifier
+
+pub(all) struct JwtClaims {
+  data : Map[String, Json]
+}
+pub fn JwtClaims::get(Self, String) -> Json?
+pub fn JwtClaims::get_audience(Self) -> String?
+pub fn JwtClaims::get_expiration(Self) -> Int64?
+pub fn JwtClaims::get_issued_at(Self) -> Int64?
+pub fn JwtClaims::get_issuer(Self) -> String?
+pub fn JwtClaims::get_jwt_id(Self) -> String?
+pub fn JwtClaims::get_not_before(Self) -> Int64?
+pub fn JwtClaims::get_subject(Self) -> String?
+pub fn JwtClaims::new() -> Self
+pub fn JwtClaims::set(Self, String, Json) -> Unit
+pub fn JwtClaims::set_audience(Self, String) -> Unit
+pub fn JwtClaims::set_expiration(Self, Int64) -> Unit
+pub fn JwtClaims::set_issued_at(Self, Int64) -> Unit
+pub fn JwtClaims::set_issuer(Self, String) -> Unit
+pub fn JwtClaims::set_jwt_id(Self, String) -> Unit
+pub fn JwtClaims::set_not_before(Self, Int64) -> Unit
+pub fn JwtClaims::set_subject(Self, String) -> Unit
+
+pub(all) struct JwtHeader {
+  alg : String
+  typ : String
+  kid : String?
+}
+pub fn JwtHeader::new(String, kid? : String) -> Self
+
+pub(all) struct JwtToken {
+  header : JwtHeader
+  claims : JwtClaims
+  signature : FixedArray[Byte]
+}
+
+pub struct RsaSigner {
+  n : @bigint.BigInt
+  d : @bigint.BigInt
+  hash_len : Int
+  alg : String
+}
+pub fn RsaSigner::new(BytesView, BytesView, String) -> Self raise JwtError
+pub impl JwtSigner for RsaSigner
+
+pub struct RsaVerifier {
+  n : @bigint.BigInt
+  e : @bigint.BigInt
+  hash_len : Int
+  alg : String
+}
+pub fn RsaVerifier::new(BytesView, BytesView, String) -> Self raise JwtError
+pub impl JwtVerifier for RsaVerifier
+
+pub struct Scalar256 {
+  limbs : FixedArray[UInt64]
+}
+pub fn Scalar256::from_bytes(BytesView) -> Self
+pub fn Scalar256::one() -> Self
+pub fn Scalar256::to_bytes(Self) -> FixedArray[Byte]
+pub fn Scalar256::zero() -> Self
+
+pub struct Sha384 {
+  ctx : Sha512Ctx
+}
+pub fn Sha384::new() -> Self
+pub impl @crypto.CryptoHasher for Sha384
+
+pub struct Sha512 {
+  ctx : Sha512Ctx
+}
+pub fn Sha512::new() -> Self
+pub impl @crypto.CryptoHasher for Sha512
+
+type Sha512Ctx
+
+// Type aliases
+
+// Traits
+pub(open) trait JwtSigner {
+  fn alg_name(Self) -> String
+  fn sign(Self, BytesView) -> FixedArray[Byte] raise JwtError
+}
+
+pub(open) trait JwtVerifier {
+  fn alg_name(Self) -> String
+  fn verify(Self, BytesView, BytesView) -> Bool
+}
+

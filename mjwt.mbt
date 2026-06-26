@@ -1,19 +1,70 @@
 ///|
-/// mjwt - A JWT (JSON Web Token) library for MoonBit
+/// # mjwt — JSON Web Token library for MoonBit
 ///
-/// Supports HS256 (HMAC-SHA256) signing and verification.
+/// A pure-MoonBit JWT library with an extensible trait-based signer architecture.
+///
+/// ## Supported algorithms
+///
+/// | Algorithm | Mechanism | File |
+/// |-----------|-----------|------|
+/// | HS256     | HMAC-SHA256   | `mjwt_signer_hmac.mbt` |
+/// | HS384     | HMAC-SHA384   | `mjwt_signer_hmac.mbt` |
+/// | HS512     | HMAC-SHA512   | `mjwt_signer_hmac.mbt` |
+/// | RS256     | RSA PKCS#1 v1.5  | `mjwt_signer_rsa.mbt` |
+/// | ES256     | ECDSA P-256      | `mjwt_signer_ecdsa.mbt` |
+///
+/// ## Quick start (HS256)
+///
+/// ```moonbit
+/// let claims = JwtClaims::new()
+/// claims.set_sub("user123")
+///
+/// let token = @mjwt.encode(claims, "my-secret")
+/// let decoded = @mjwt.decode(token, "my-secret")
+/// ```
+///
+/// ## Trait-based API (extensible)
+///
+/// ```moonbit
+/// let signer   = HmacSigner::new("HS256", "my-secret")
+/// let verifier = HmacVerifier::new("HS256", "my-secret")
+/// let token    = @mjwt.encode_with(signer, claims)
+/// let decoded  = @mjwt.decode_with(verifier, token)
+/// ```
+///
+/// ## Architecture
+///
+/// - **Core** (`mjwt.mbt`): `JwtError`, `JwtSigner`/`JwtVerifier` traits,
+///   `JwtHeader`, `JwtClaims`, `JwtToken`, Base64URL encoding, public API.
+/// - **Hash** (`mjwt_hash_sha512.mbt`): SHA-384 / SHA-512 implementations
+///   implementing the `@crypto.CryptoHasher` trait.
+/// - **Signers** (`mjwt_signer_*.mbt`): Algorithm-specific `JwtSigner` /
+///   `JwtVerifier` implementations.
+/// - **Extending**: implement `JwtSigner` / `JwtVerifier` on any custom type.
 
-// ===== Error Type =====
+// =============================================================================
+//  Errors
+// =============================================================================
 
 ///|
-/// Error type for JWT operations
+/// Errors that can occur during JWT encoding, decoding, or verification.
 pub suberror JwtError {
+  /// Malformed compact serialization (not 3 dot-separated parts)
   InvalidFormat(String)
+  /// Invalid Base64URL character encountered
   InvalidBase64(String)
+  /// JSON parsing failure on header or claims
   InvalidJson(String)
+  /// UTF-8 decoding failure
   InvalidUtf8(String)
+  /// Invalid JWT header structure
   InvalidHeader(String)
+  /// Signature does not match
   SignatureMismatch
+  /// Requested algorithm is not supported
+  UnsupportedAlgorithm(String)
+  /// Cryptographic operation failed (e.g. key too short)
+  CryptoError(String)
 } derive(Debug, Eq)
 
 ///|
@@ -25,44 +76,70 @@ pub fn JwtError::to_string(self : JwtError) -> String {
     InvalidUtf8(msg) => "invalid UTF-8: \{msg}"
     InvalidHeader(msg) => "invalid header: \{msg}"
     SignatureMismatch => "signature verification failed"
+    UnsupportedAlgorithm(s) => "unsupported algorithm: \{s}"
+    CryptoError(msg) => "crypto error: \{msg}"
   }
 }
 
-// ===== Algorithm =====
+// =============================================================================
+//  Traits — pluggable signing & verification
+// =============================================================================
 
 ///|
-/// Supported JWT algorithms
-pub(all) enum Algorithm {
-  HS256
-} derive(Eq, Debug)
-
-///|
-fn Algorithm::to_string(self : Algorithm) -> String {
-  match self {
-    HS256 => "HS256"
-  }
+/// Pluggable JWT signer.
+///
+/// Implement this on any type that holds key material.
+///
+/// ```moonbit nocheck
+/// struct RsaSigner { n: BigUint, d: BigUint }
+/// impl JwtSigner for RsaSigner with fn alg_name(_) -> String { "RS256" }
+/// impl JwtSigner for RsaSigner with fn sign(self, msg) -> .. { .. }
+/// ```
+pub(open) trait JwtSigner {
+  /// Algorithm name placed in the JWT header, e.g. `"HS256"`.
+  fn alg_name(Self) -> String
+  /// Produce a raw signature over `message`.
+  fn sign(Self, BytesView) -> FixedArray[Byte] raise JwtError
 }
 
-// ===== JWT Header =====
+///|
+/// Pluggable JWT verifier.
+///
+/// ```moonbit nocheck
+/// struct RsaVerifier { n: BigUint, e: BigUint }
+/// impl JwtVerifier for RsaVerifier with fn alg_name(_) -> String { "RS256" }
+/// impl JwtVerifier for RsaVerifier with fn verify(self, msg, sig) -> .. { .. }
+/// ```
+pub(open) trait JwtVerifier {
+  /// Algorithm name, must match the signer's output.
+  fn alg_name(Self) -> String
+  /// Return `true` iff `signature` is valid for `message`.
+  fn verify(Self, BytesView, BytesView) -> Bool
+}
+
+// =============================================================================
+//  JWT Header
+// =============================================================================
 
 ///|
-/// JWT Header containing algorithm and type information
 pub(all) struct JwtHeader {
-  alg : Algorithm
+  /// Algorithm name, e.g. `"HS256"`, `"RS256"`, `"ES256"`
+  alg : String
+  /// Token type, always `"JWT"`
   typ : String
+  /// Optional key hint
   kid : String?
 }
 
 ///|
-/// Create a new JWT Header
-pub fn JwtHeader::new(alg : Algorithm, kid? : String = "") -> JwtHeader {
+pub fn JwtHeader::new(alg : String, kid? : String = "") -> JwtHeader {
   { alg, typ: "JWT", kid: if kid == "" { None } else { Some(kid) } }
 }
 
 ///|
 fn JwtHeader::to_json(self : JwtHeader) -> Json {
   let map = Map([], capacity=3)
-  map.set("alg", Json::string(self.alg.to_string()))
+  map.set("alg", Json::string(self.alg))
   map.set("typ", Json::string(self.typ))
   match self.kid {
     Some(kid) => map.set("kid", Json::string(kid))
@@ -82,10 +159,6 @@ fn JwtHeader::from_json(json : Json) -> JwtHeader raise JwtError {
     Some(_) => raise InvalidHeader("alg must be a string")
     None => raise InvalidHeader("missing alg")
   }
-  let alg = match alg_str {
-    "HS256" => HS256
-    _ => raise InvalidHeader("unsupported algorithm: \{alg_str}")
-  }
   let typ = match obj.get("typ") {
     Some(String(s)) => s
     Some(_) => raise InvalidHeader("typ must be a string")
@@ -95,44 +168,48 @@ fn JwtHeader::from_json(json : Json) -> JwtHeader raise JwtError {
     Some(String(s)) => Some(s)
     _ => None
   }
-  { alg, typ, kid }
+  { alg: alg_str, typ, kid }
 }
 
-// ===== JWT Claims =====
+// =============================================================================
+//  JWT Claims
+// =============================================================================
 
 ///|
-/// JWT Claims payload.
 pub(all) struct JwtClaims {
   data : Map[String, Json]
 }
 
 ///|
-/// Create a new empty JWT Claims
 pub fn JwtClaims::new() -> JwtClaims {
   { data: Map([], capacity=10) }
 }
 
 ///|
-/// Set a custom claim
+///  Store an arbitrary key-value pair in the claims payload.
+///  - `key`   – claim name, e.g. `"custom-claim"`
+///  - `value` – any JSON value (`Json::string(...)`, `Json::number(...)`, etc.)
 pub fn JwtClaims::set(self : JwtClaims, key : String, value : Json) -> Unit {
   self.data.set(key, value)
 }
 
 ///|
-/// Get a claim value
+///  Retrieve a previously stored claim by name.
+///  Returns `None` when the key does not exist.
 pub fn JwtClaims::get(self : JwtClaims, key : String) -> Json? {
   self.data.get(key)
 }
 
 ///|
-/// Set the issuer (iss) claim
-pub fn JwtClaims::set_iss(self : JwtClaims, iss : String) -> Unit {
+///  Registered claim **iss** (issuer) — identifies the principal that issued the JWT.
+///  Per RFC 7519 §4.1.1.
+pub fn JwtClaims::set_issuer(self : JwtClaims, iss : String) -> Unit {
   self.data.set("iss", Json::string(iss))
 }
 
 ///|
-/// Get the issuer (iss) claim
-pub fn JwtClaims::get_iss(self : JwtClaims) -> String? {
+///  Returns the **iss** (issuer) value, or `None` if absent.
+pub fn JwtClaims::get_issuer(self : JwtClaims) -> String? {
   match self.data.get("iss") {
     Some(String(s)) => Some(s)
     _ => None
@@ -140,14 +217,15 @@ pub fn JwtClaims::get_iss(self : JwtClaims) -> String? {
 }
 
 ///|
-/// Set the subject (sub) claim
-pub fn JwtClaims::set_sub(self : JwtClaims, sub : String) -> Unit {
+///  Registered claim **sub** (subject) — identifies the principal that is the
+///  subject of the JWT.  Per RFC 7519 §4.1.2.
+pub fn JwtClaims::set_subject(self : JwtClaims, sub : String) -> Unit {
   self.data.set("sub", Json::string(sub))
 }
 
 ///|
-/// Get the subject (sub) claim
-pub fn JwtClaims::get_sub(self : JwtClaims) -> String? {
+///  Returns the **sub** (subject) value, or `None` if absent.
+pub fn JwtClaims::get_subject(self : JwtClaims) -> String? {
   match self.data.get("sub") {
     Some(String(s)) => Some(s)
     _ => None
@@ -155,14 +233,15 @@ pub fn JwtClaims::get_sub(self : JwtClaims) -> String? {
 }
 
 ///|
-/// Set the audience (aud) claim
-pub fn JwtClaims::set_aud(self : JwtClaims, aud : String) -> Unit {
+///  Registered claim **aud** (audience) — identifies the recipients that the JWT
+///  is intended for.  Per RFC 7519 §4.1.3.
+pub fn JwtClaims::set_audience(self : JwtClaims, aud : String) -> Unit {
   self.data.set("aud", Json::string(aud))
 }
 
 ///|
-/// Get the audience (aud) claim
-pub fn JwtClaims::get_aud(self : JwtClaims) -> String? {
+///  Returns the **aud** (audience) value, or `None` if absent.
+pub fn JwtClaims::get_audience(self : JwtClaims) -> String? {
   match self.data.get("aud") {
     Some(String(s)) => Some(s)
     _ => None
@@ -170,14 +249,15 @@ pub fn JwtClaims::get_aud(self : JwtClaims) -> String? {
 }
 
 ///|
-/// Set the expiration time (exp) claim as a Unix timestamp
-pub fn JwtClaims::set_exp(self : JwtClaims, exp : Int64) -> Unit {
+///  Registered claim **exp** (expiration time) — Unix timestamp after which the
+///  JWT MUST NOT be accepted.  Per RFC 7519 §4.1.4.
+pub fn JwtClaims::set_expiration(self : JwtClaims, exp : Int64) -> Unit {
   self.data.set("exp", Json::number(exp.to_double()))
 }
 
 ///|
-/// Get the expiration time (exp) claim
-pub fn JwtClaims::get_exp(self : JwtClaims) -> Int64? {
+///  Returns the **exp** (expiration time) value, or `None` if absent.
+pub fn JwtClaims::get_expiration(self : JwtClaims) -> Int64? {
   match self.data.get("exp") {
     Some(Number(n, ..)) => Some(n.to_int64())
     _ => None
@@ -185,14 +265,15 @@ pub fn JwtClaims::get_exp(self : JwtClaims) -> Int64? {
 }
 
 ///|
-/// Set the not before (nbf) claim as a Unix timestamp
-pub fn JwtClaims::set_nbf(self : JwtClaims, nbf : Int64) -> Unit {
+///  Registered claim **nbf** (not before) — Unix timestamp before which the JWT
+///  MUST NOT be accepted.  Per RFC 7519 §4.1.5.
+pub fn JwtClaims::set_not_before(self : JwtClaims, nbf : Int64) -> Unit {
   self.data.set("nbf", Json::number(nbf.to_double()))
 }
 
 ///|
-/// Get the not before (nbf) claim
-pub fn JwtClaims::get_nbf(self : JwtClaims) -> Int64? {
+///  Returns the **nbf** (not before) value, or `None` if absent.
+pub fn JwtClaims::get_not_before(self : JwtClaims) -> Int64? {
   match self.data.get("nbf") {
     Some(Number(n, ..)) => Some(n.to_int64())
     _ => None
@@ -200,14 +281,15 @@ pub fn JwtClaims::get_nbf(self : JwtClaims) -> Int64? {
 }
 
 ///|
-/// Set the issued at (iat) claim as a Unix timestamp
-pub fn JwtClaims::set_iat(self : JwtClaims, iat : Int64) -> Unit {
+///  Registered claim **iat** (issued at) — Unix timestamp when the JWT was
+///  created.  Per RFC 7519 §4.1.6.
+pub fn JwtClaims::set_issued_at(self : JwtClaims, iat : Int64) -> Unit {
   self.data.set("iat", Json::number(iat.to_double()))
 }
 
 ///|
-/// Get the issued at (iat) claim
-pub fn JwtClaims::get_iat(self : JwtClaims) -> Int64? {
+///  Returns the **iat** (issued at) value, or `None` if absent.
+pub fn JwtClaims::get_issued_at(self : JwtClaims) -> Int64? {
   match self.data.get("iat") {
     Some(Number(n, ..)) => Some(n.to_int64())
     _ => None
@@ -215,14 +297,15 @@ pub fn JwtClaims::get_iat(self : JwtClaims) -> Int64? {
 }
 
 ///|
-/// Set the JWT ID (jti) claim
-pub fn JwtClaims::set_jti(self : JwtClaims, jti : String) -> Unit {
+///  Registered claim **jti** (JWT ID) — a unique identifier for the JWT.
+///  Per RFC 7519 §4.1.7.
+pub fn JwtClaims::set_jwt_id(self : JwtClaims, jti : String) -> Unit {
   self.data.set("jti", Json::string(jti))
 }
 
 ///|
-/// Get the JWT ID (jti) claim
-pub fn JwtClaims::get_jti(self : JwtClaims) -> String? {
+///  Returns the **jti** (JWT ID) value, or `None` if absent.
+pub fn JwtClaims::get_jwt_id(self : JwtClaims) -> String? {
   match self.data.get("jti") {
     Some(String(s)) => Some(s)
     _ => None
@@ -240,23 +323,25 @@ fn JwtClaims::from_json(json : Json) -> JwtClaims {
     Object(o) => o
     _ => Map([], capacity=0)
   }
-  { data: data }
+  { data, }
 }
 
-// ===== JWT Token =====
+// =============================================================================
+//  JWT Token (parsed representation)
+// =============================================================================
 
 ///|
-/// A parsed JWT token
 pub(all) struct JwtToken {
   header : JwtHeader
   claims : JwtClaims
   signature : FixedArray[Byte]
 }
 
-// ===== Internal helpers =====
+// =============================================================================
+//  Internal helpers
+// =============================================================================
 
 ///|
-/// Split a string by a delimiter character, returning the parts
 fn split_by_char(s : String, delim : Char) -> Array[String] {
   let result : Array[String] = []
   let mut current = StringBuilder::new()
@@ -273,32 +358,25 @@ fn split_by_char(s : String, delim : Char) -> Array[String] {
 }
 
 ///|
-/// Base64URL encode without padding (= characters)
-///
-/// Uses the Base64 Encoder with padding, then strips trailing '=' chars.
-/// This is correct per JWT RFC 7515.
 fn base64url_encode(input : BytesView) -> String {
   let raw = @base64.encode(input, url_safe=true)
-  // Strip trailing '=' padding characters
   let chars = raw.to_array()
-  let mut trim_end = chars.length()
+  let mut n = chars.length()
   for i = chars.length() - 1; i >= 0; i = i - 1 {
     if chars[i] == '=' {
-      trim_end = i
+      n = i
     } else {
       break
     }
   }
-  // Build string without padding
-  let result = StringBuilder::new()
-  for i = 0; i < trim_end; i = i + 1 {
-    result.write_char(chars[i])
+  let out = StringBuilder::new()
+  for i = 0; i < n; i = i + 1 {
+    out.write_char(chars[i])
   }
-  result.to_string()
+  out.to_string()
 }
 
 ///|
-/// Base64URL decode (handles missing padding)
 fn base64url_decode(input : StringView) -> Bytes raise JwtError {
   @base64.decode(input, url_safe=true) catch {
     @base64.InvalidChar(ch) => raise InvalidBase64("invalid character: \{ch}")
@@ -306,148 +384,110 @@ fn base64url_decode(input : StringView) -> Bytes raise JwtError {
 }
 
 ///|
-/// Sign a message with HMAC-SHA256
-fn hmac_sha256(key : BytesView, message : BytesView) -> FixedArray[Byte] {
-  let sha256 = @crypto.SHA256::new()
-  @crypto.hmac(sha256, key, message)
-}
-
-///|
-/// Convert a string to UTF-8 bytes
 fn string_to_bytes(s : String) -> Bytes {
   @encoding.encode(UTF8, s)
 }
 
 ///|
-fn split_token(token_str : StringView) -> (String, String, String) raise JwtError {
-  let s = token_str.to_owned()
-  let parts = split_by_char(s, '.')
+fn split_token(sv : StringView) -> (String, String, String) raise JwtError {
+  let parts = split_by_char(sv.to_owned(), '.')
   guard parts.length() == 3 else { raise InvalidFormat("expected 3 parts") }
   (parts[0], parts[1], parts[2])
 }
 
 ///|
-fn bytes_equal(a : Bytes, b : FixedArray[Byte]) -> Bool {
-  if a.length() != b.length() { return false }
-  for i = 0; i < a.length(); i = i + 1 {
-    if a[i] != b[i] { return false }
-  }
-  true
-}
-
-///|
 fn decode_json_str(data : Bytes) -> (String, Json) raise JwtError {
-  let str = @encoding.decoder(UTF8).decode(data.view(), stream=false) catch {
+  let s = @encoding.decoder(UTF8).decode(data.view(), stream=false) catch {
     _ => raise InvalidUtf8("invalid UTF-8")
   }
-  let json = @json5.parse(str) catch {
-    _ => raise InvalidJson("parse error")
-  }
-  (str, json)
+  let j = @json5.parse(s) catch { _ => raise InvalidJson("parse error") }
+  (s, j)
 }
 
-// ===== Public API =====
+// =============================================================================
+//  Public API — trait-based
+// =============================================================================
 
 ///|
-/// Encode and sign a JWT token
+/// Encode `claims` into a compact JWT string signed by `signer`.
 ///
-/// Parameters:
-/// - `alg`: The signing algorithm (e.g., `HS256`)
-/// - `claims`: The JWT claims payload
-/// - `secret`: The secret key for HMAC signing
-///
-/// Returns the compact JWT string in the format `header.payload.signature`
-pub fn encode(alg : Algorithm, claims : JwtClaims, secret : String) -> String {
-  let header = JwtHeader::new(alg)
-  let header_json = header.to_json()
-  let claims_json = claims.to_json()
-
-  let header_b64 = base64url_encode(string_to_bytes(header_json.stringify()).view())
-  let claims_b64 = base64url_encode(string_to_bytes(claims_json.stringify()).view())
-
-  let input = header_b64 + "." + claims_b64
-  let input_bytes = string_to_bytes(input)
-  let secret_bytes = string_to_bytes(secret)
-  let sig = hmac_sha256(secret_bytes.view(), input_bytes.view())
-  let sig_b64 = base64url_encode(sig.unsafe_reinterpret_as_bytes().view())
-
-  input + "." + sig_b64
+/// ```moonbit nocheck
+/// let s = HmacSigner::new("HS256", "my-secret")?
+/// let t = mjwt::encode_with(s, claims)?
+/// ```
+pub fn[S : JwtSigner] encode_with(
+  signer : S,
+  claims : JwtClaims,
+) -> String raise JwtError {
+  let hdr = JwtHeader::new(signer.alg_name())
+  let hdr_b64 = base64url_encode(
+    string_to_bytes(hdr.to_json().stringify()).view(),
+  )
+  let pay_b64 = base64url_encode(
+    string_to_bytes(claims.to_json().stringify()).view(),
+  )
+  let input = hdr_b64 + "." + pay_b64
+  let sig = signer.sign(string_to_bytes(input).view())
+  input + "." + base64url_encode(sig.unsafe_reinterpret_as_bytes().view())
 }
 
 ///|
-/// Verify and decode a JWT token
+/// Verify and decode a compact JWT string using `verifier`.
 ///
-/// Parameters:
-/// - `token_str`: The compact JWT string
-/// - `secret`: The secret key for HMAC verification
-///
-/// Returns the decoded `JwtToken` if the signature is valid
-pub fn decode(token_str : StringView, secret : String) -> JwtToken raise JwtError {
-  let (header_b64, claims_b64, sig_b64) = split_token(token_str)
-
-  // Verify signature
-  let input = header_b64 + "." + claims_b64
-  let input_bytes = string_to_bytes(input)
-  let secret_bytes = string_to_bytes(secret)
-  let expected_sig = hmac_sha256(secret_bytes.view(), input_bytes.view())
-
-  let decoded_sig = base64url_decode(sig_b64)
-  if !bytes_equal(decoded_sig, expected_sig) {
+/// ```moonbit nocheck
+/// let v = HmacVerifier::new("HS256", "my-secret")?
+/// let tok = mjwt::decode_with(v, token)?
+/// ```
+pub fn[V : JwtVerifier] decode_with(
+  verifier : V,
+  sv : StringView,
+) -> JwtToken raise JwtError {
+  let (hdr_b64, pay_b64, sig_b64) = split_token(sv)
+  let hdr = JwtHeader::from_json(decode_json_str(base64url_decode(hdr_b64)).1)
+  let claims = JwtClaims::from_json(
+    decode_json_str(base64url_decode(pay_b64)).1,
+  )
+  let input = string_to_bytes(hdr_b64 + "." + pay_b64)
+  let sig = base64url_decode(sig_b64)
+  if !verifier.verify(input.view(), sig.view()) {
     raise SignatureMismatch
   }
+  { header: hdr, claims, signature: sig.to_fixedarray() }
+}
 
-  // Decode header
-  let header_bytes = base64url_decode(header_b64)
-  let (_, header_json) = decode_json_str(header_bytes)
-  let header = JwtHeader::from_json(header_json)
+// =============================================================================
+//  Convenience wrappers (defaults to HS256)
+// =============================================================================
 
-  // Decode claims
-  let claims_bytes = base64url_decode(claims_b64)
-  let (_, claims_json) = decode_json_str(claims_bytes)
-  let claims = JwtClaims::from_json(claims_json)
-
-  { header, claims, signature: expected_sig }
+///|
+/// Encode using HMAC-SHA256.
+pub fn encode(claims : JwtClaims, secret : String) -> String raise JwtError {
+  encode_with(HmacSigner::new("HS256", secret) catch { e => raise e }, claims)
 }
 
 ///|
-/// Decode a JWT token without verifying the signature
-///
-/// WARNING: This does NOT verify the token's authenticity.
-/// Only use for inspecting token contents.
-pub fn decode_without_verify(token_str : StringView) -> JwtToken raise JwtError {
-  let (header_b64, claims_b64, sig_b64) = split_token(token_str)
-
-  // Decode header
-  let header_bytes = base64url_decode(header_b64)
-  let (_, header_json) = decode_json_str(header_bytes)
-  let header = JwtHeader::from_json(header_json)
-
-  // Decode claims
-  let claims_bytes = base64url_decode(claims_b64)
-  let (_, claims_json) = decode_json_str(claims_bytes)
-  let claims = JwtClaims::from_json(claims_json)
-
-  // Decode signature
-  let sig_bytes = base64url_decode(sig_b64)
-  let sig_array = sig_bytes.to_fixedarray()
-
-  { header, claims, signature: sig_array }
+/// Decode and verify HMAC-SHA256.
+pub fn decode(sv : StringView, secret : String) -> JwtToken raise JwtError {
+  decode_with(HmacVerifier::new("HS256", secret) catch { e => raise e }, sv)
 }
 
 ///|
-/// Verify a JWT token's signature
-///
-/// Returns `true` if the signature is valid, `false` otherwise
-pub fn verify(token_str : StringView, secret : String) -> Bool {
-  let parts = split_token(token_str) catch { _ => return false }
-  let (header_b64, claims_b64, sig_b64) = parts
+/// Decode **without** signature verification. Use for inspecting tokens only.
+pub fn decode_without_verify(sv : StringView) -> JwtToken raise JwtError {
+  let (hdr_b64, pay_b64, sig_b64) = split_token(sv)
+  let hdr = JwtHeader::from_json(decode_json_str(base64url_decode(hdr_b64)).1)
+  let claims = JwtClaims::from_json(
+    decode_json_str(base64url_decode(pay_b64)).1,
+  )
+  { header: hdr, claims, signature: base64url_decode(sig_b64).to_fixedarray() }
+}
 
-  let input = header_b64 + "." + claims_b64
-  let input_bytes = string_to_bytes(input)
-  let secret_bytes = string_to_bytes(secret)
-  let expected_sig = hmac_sha256(secret_bytes.view(), input_bytes.view())
-
-  let decoded_sig = base64url_decode(sig_b64) catch { _ => return false }
-
-  bytes_equal(decoded_sig, expected_sig)
+///|
+/// Verify HMAC-SHA256 signature. Returns `true` / `false` (no panic).
+pub fn verify(sv : StringView, secret : String) -> Bool {
+  let v = HmacVerifier::new("HS256", secret) catch { _ => return false }
+  let (hdr_b64, pay_b64, sig_b64) = split_token(sv) catch { _ => return false }
+  let input = string_to_bytes(hdr_b64 + "." + pay_b64)
+  let sig = base64url_decode(sig_b64) catch { _ => return false }
+  v.verify(input.view(), sig.view())
 }
