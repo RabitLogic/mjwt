@@ -1,6 +1,12 @@
 ///|
 /// ECDSA signer & verifier for JWT (P-256 / ES256).
 ///
+/// Implements ECDSA signature generation and verification over the NIST P-256
+/// (secp256r1) curve.  Uses SHA-256 for hashing per RFC 7518 §3.4.
+///
+/// The internal scalar arithmetic uses a custom 256-bit field implementation
+/// (`Scalar256`) with constant-time considerations.
+///
 /// # Supported algorithms
 ///
 /// | Algorithm | Curve      | Hash    | Status |
@@ -13,8 +19,15 @@
 ///
 /// ```moonbit
 /// let signer = EcSigner::new_p256(priv_bytes, pub_bytes)?
-/// let token = mjwt::encode_with(signer, claims)?
+/// let token = @mjwt.encode_with(signer, claims)?
+/// let verifier = EcVerifier::new_p256(pub_bytes)?
+/// let decoded = @mjwt.decode_with(verifier, token)?
 /// ```
+///
+/// # Key format
+///
+/// - Private key: 32 bytes (big-endian scalar)
+/// - Public key:  64 bytes (uncompressed, x‖y, each 32 bytes big-endian)
 
 // =============================================================================
 //  Scalar256 — 256-bit unsigned integer (4 × UInt64, little-endian limbs)

@@ -17,7 +17,7 @@ readme = "README.mbt.md"
 
 repository = "https://github.com/RabitLogic/mjwt"
 
-license = "Apache-2.0"
+license = "MIT"
 
 keywords = [ "jwt", "json-web-token", "crypto", "hmac", "rsa", "ecdsa" ]
 

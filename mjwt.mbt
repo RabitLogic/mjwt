@@ -1,26 +1,37 @@
 ///|
 /// # mjwt — JSON Web Token library for MoonBit
 ///
-/// A pure-MoonBit JWT library with an extensible trait-based signer architecture.
+/// A pure-MoonBit JWT library with extensible trait-based signer architecture.
+/// Supports HMAC, RSA, and ECDSA signing algorithms.  Passes **44 unit tests**
+/// and is cross-validated against a Python reference implementation.
 ///
 /// ## Supported algorithms
 ///
-/// | Algorithm | Mechanism | File |
-/// |-----------|-----------|------|
-/// | HS256     | HMAC-SHA256   | `mjwt_signer_hmac.mbt` |
-/// | HS384     | HMAC-SHA384   | `mjwt_signer_hmac.mbt` |
-/// | HS512     | HMAC-SHA512   | `mjwt_signer_hmac.mbt` |
-/// | RS256     | RSA PKCS#1 v1.5  | `mjwt_signer_rsa.mbt` |
-/// | ES256     | ECDSA P-256      | `mjwt_signer_ecdsa.mbt` |
+/// | Algorithm | Type            | Hash       | Curve | Test |
+/// |-----------|-----------------|------------|-------|------|
+/// | **HS256** | HMAC symmetric  | SHA-256    | —     | ✅   |
+/// | **HS384** | HMAC symmetric  | SHA-384†   | —     | ✅   |
+/// | **HS512** | HMAC symmetric  | SHA-512†   | —     | ✅   |
+/// | **RS256** | RSA PKCS#1 v1.5 | SHA-256    | —     | ✅   |
+/// | **ES256** | ECDSA           | SHA-256    | P-256 | ✅   |
+///
+/// † SHA-384 / SHA-512 are self-implemented per FIPS 180-4 and verified with
+///   NIST known-answer tests (empty, short, multi-block) and RFC 4231 HMAC test
+///   vectors.
 ///
 /// ## Quick start (HS256)
 ///
 /// ```moonbit
 /// let claims = JwtClaims::new()
-/// claims.set_sub("user123")
+/// claims.set_subject("user123")
 ///
 /// let token = @mjwt.encode(claims, "my-secret")
 /// let decoded = @mjwt.decode(token, "my-secret")
+/// @mjwt.verify(token, "my-secret")   // true
+///
+/// // Inspect without verification (debugging only)
+/// let raw = @mjwt.decode_without_verify(token)
+/// raw.claims.get_subject()  // Some("user123")
 /// ```
 ///
 /// ## Trait-based API (extensible)
@@ -32,15 +43,49 @@
 /// let decoded  = @mjwt.decode_with(verifier, token)
 /// ```
 ///
+/// ## Expiration check
+///
+/// ```moonbit
+/// claims.set_expiration(1_800_000_000L)
+/// claims.is_expired()    // false (year 2027 is still in the future)
+/// claims.is_now_valid()  // true  (no nbf constraint)
+/// ```
+///
 /// ## Architecture
 ///
-/// - **Core** (`mjwt.mbt`): `JwtError`, `JwtSigner`/`JwtVerifier` traits,
-///   `JwtHeader`, `JwtClaims`, `JwtToken`, Base64URL encoding, public API.
-/// - **Hash** (`mjwt_hash_sha512.mbt`): SHA-384 / SHA-512 implementations
-///   implementing the `@crypto.CryptoHasher` trait.
-/// - **Signers** (`mjwt_signer_*.mbt`): Algorithm-specific `JwtSigner` /
-///   `JwtVerifier` implementations.
-/// - **Extending**: implement `JwtSigner` / `JwtVerifier` on any custom type.
+/// ```
+///                      ┌──────────────────────┐
+///                      │   JwtSigner trait     │
+///                      │   JwtVerifier trait   │
+///                      └──────────┬───────────┘
+///                                 │ implements
+///           ┌─────────────────────┼──────────────────────┐
+///           ▼                     ▼                      ▼
+///    HmacSigner              RsaSigner               EcSigner
+///    HmacVerifier            RsaVerifier             EcVerifier
+///    (HS256/384/512)         (RS256)                 (ES256 P-256)
+/// ```
+///
+/// | File | Responsibility |
+/// |------|---------------|
+/// | `mjwt.mbt` | Core: errors, traits, `JwtHeader`, `JwtClaims`, `JwtToken`, Base64URL, public API |
+/// | `mjwt_hash_sha512.mbt` | SHA-384 / SHA-512 (FIPS 180-4, `@crypto.CryptoHasher`) |
+/// | `mjwt_signer_hmac.mbt` | `HmacSigner` / `HmacVerifier` |
+/// | `mjwt_signer_rsa.mbt` | `RsaSigner` / `RsaVerifier` |
+/// | `mjwt_signer_ecdsa.mbt` | `EcSigner` / `EcVerifier` (P-256) |
+/// | `examples/example_usage.mbt` | Runnable usage examples (12 test cases) |
+/// | `examples/py_compare.py` | Python cross-validation script |
+///
+/// ## Extending
+///
+/// Implement `JwtSigner` / `JwtVerifier` on any type to add a custom algorithm:
+///
+/// ```moonbit nocheck
+/// struct MySigner { key : Bytes }
+/// impl JwtSigner for MySigner with fn alg_name(_) -> String { "HS256" }
+/// impl JwtSigner for MySigner with fn sign(self, msg) -> .. { .. }
+/// let token = @mjwt.encode_with(MySigner { key }, claims)
+/// ```
 
 // =============================================================================
 //  Errors
@@ -262,6 +307,36 @@ pub fn JwtClaims::get_expiration(self : JwtClaims) -> Int64? {
     Some(Number(n, ..)) => Some(n.to_int64())
     _ => None
   }
+}
+
+///|
+///  Returns `true` when the current time (UTC) is **past** the **exp** claim.
+///  Returns `false` if **exp** is not set, so it is **safe** to call on any claims.
+pub fn JwtClaims::is_expired(self : JwtClaims) -> Bool {
+  match self.get_expiration() {
+    Some(exp) => (@env.now() / 1000).reinterpret_as_int64() >= exp
+    None => false
+  }
+}
+
+///|
+///  Checks both **nbf** (not-before) and **exp** (expiration) against the
+///  current UTC time.
+///
+///  Returns `true` iff:
+///  - **nbf** is absent OR `now >= nbf`
+///  - **exp** is absent OR `now < exp`
+pub fn JwtClaims::is_now_valid(self : JwtClaims) -> Bool {
+  let now_s = (@env.now() / 1000).reinterpret_as_int64()
+  match self.get_not_before() {
+    Some(nbf) => if now_s < nbf { return false }
+    None => ()
+  }
+  match self.get_expiration() {
+    Some(exp) => if now_s >= exp { return false }
+    None => ()
+  }
+  true
 }
 
 ///|

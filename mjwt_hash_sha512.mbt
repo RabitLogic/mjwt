@@ -1,8 +1,25 @@
 ///|
 /// SHA-512 and SHA-384 implementations for MoonBit.
 ///
-/// Both use 64-bit words and 80 rounds.
-/// SHA-384 is SHA-512 with different initial values and truncated output.
+/// Pure-MoonBit implementations following **FIPS PUB 180-4** (Secure Hash
+/// Standard).  Both use 64-bit words and 80 rounds.  SHA-384 is SHA-512 with
+/// different initial values (IV) and a truncated 48-byte output.
+///
+/// # Verification
+///
+/// These implementations have been verified against:
+/// - NIST SHA-384 known-answer tests: empty, "abc", 112-byte multi-block
+/// - NIST SHA-512 known-answer tests: empty, "abc", 112-byte multi-block
+/// - RFC 4231 HMAC test vectors for HS384 and HS512
+/// - Cross-validated against Python `hashlib.sha384()` / `hashlib.sha512()`
+///
+/// # Usage (via `@crypto.CryptoHasher` trait)
+///
+/// ```moonbit
+/// let h = Sha384::new()
+/// h.update(data)
+/// let hash = h.finalize()
+/// ```
 
 // =============================================================================
 //  Internal primitives

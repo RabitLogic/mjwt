@@ -1,6 +1,9 @@
 ///|
 /// RSA signer & verifier for JWT (PKCS#1 v1.5).
 ///
+/// Implements the RSASSA-PKCS1-v1_5 signature scheme with SHA-256 hash,
+/// as specified in RFC 8017 §8.2 and RFC 7518 §3.3.
+///
 /// # Supported algorithms
 ///
 /// | Algorithm | Hash    | Status |
@@ -13,8 +16,27 @@
 ///
 /// ```moonbit
 /// let signer = RsaSigner::new(n_bytes, d_bytes, "RS256")?
-/// let token = mjwt::encode_with(signer, claims)?
+/// let token = @mjwt.encode_with(signer, claims)?
+///
+/// let verifier = RsaVerifier::new(n_bytes, e_bytes, "RS256")?
+/// let decoded = @mjwt.decode_with(verifier, token)?
 /// ```
+///
+/// # Key format
+///
+/// All parameters are big-endian byte arrays:
+/// - `n_bytes` — RSA modulus (k bytes, where k is the octet length)
+/// - `d_bytes` — RSA private exponent (k bytes)
+/// - `e_bytes` — RSA public exponent (commonly 3 bytes: `0x010001` = 65537)
+///
+/// # Notes
+///
+/// - `BigInt::from_octets` treats input bytes as **signed** (two's complement).
+///   If the first byte has MSB=1, the value becomes negative.  The constructors
+///   handle this transparently by prepending a `\x00` byte.
+/// - The modulus **must** be large enough so that `k - hash_len - 19 ≥ 8`
+///   (i.e. at least 8 padding bytes).  A 2048-bit key (k=256) satisfies this
+///   for SHA-256.
 
 // =============================================================================
 //  DER prefix for DigestInfo
@@ -65,6 +87,26 @@ pub struct RsaSigner {
 /// - `n_bytes` — modulus in big-endian bytes
 /// - `d_bytes` — private exponent in big-endian bytes
 /// - `alg` — `"RS256"`, `"RS384"`, or `"RS512"`
+
+///|
+/// Convert big-endian bytes to an unsigned `BigInt`.
+///
+/// MoonBit's `BigInt::from_octets` interprets bytes as signed (two's complement),
+/// so when the most significant byte has MSB=1 (e.g. `0xAB…`), the resulting
+/// `BigInt` would be **negative** — which is incorrect for RSA modulus or
+/// exponent values that are inherently unsigned.
+///
+/// This function prepends a `\x00` byte to force an unsigned interpretation,
+/// yielding the correct positive `BigInt`.
+fn unsigned_bigint_from_bytes(data : BytesView) -> BigInt {
+  let padded = FixedArray::make(data.length() + 1, b'\x00')
+  for i = 0; i < data.length(); i = i + 1 {
+    padded[i + 1] = data[i]
+  }
+  BigInt::from_octets(padded.unsafe_reinterpret_as_bytes().view())
+}
+
+///|
 pub fn RsaSigner::new(
   n_bytes : BytesView,
   d_bytes : BytesView,
@@ -76,8 +118,8 @@ pub fn RsaSigner::new(
     "RS512" => (64, "RS512")
     _ => raise UnsupportedAlgorithm(alg)
   }
-  let n = BigInt::from_octets(n_bytes)
-  let d = BigInt::from_octets(d_bytes)
+  let n = unsigned_bigint_from_bytes(n_bytes)
+  let d = unsigned_bigint_from_bytes(d_bytes)
   { n, d, hash_len, alg: alg_name }
 }
 
@@ -99,13 +141,14 @@ pub impl JwtSigner for RsaSigner with fn sign(
     _ => raise UnsupportedAlgorithm(self.alg)
   }
   let prefix = der_prefix(self.hash_len)
-  let em_len = self.n.bit_length().to_uint64().to_int() // ceil(bit_len/8) = byte_len
-  let k = (em_len + 7) / 8
+  // k = octet length of the RSA modulus
+  let k = (self.n.bit_length() + 7) / 8
 
-  // 2. Build EMSA-PKCS1-v1_5-ENCODE
+  // 2. Build EMSA-PKCS1-v1_5-ENCODE (RFC 8017 §9.2)
   // EM = 0x00 || 0x01 || PS || 0x00 || T
-  // PS = k - len(T) - 3 bytes of 0xff
-  let t_len = 2 + 8 + prefix.length() + hash.length()
+  // T  = DER-encoded DigestInfo
+  // PS = k - len(T) - 3  (must be >= 8)
+  let t_len = prefix.length() + hash.length()
   let ps_len = k - t_len - 3
   if ps_len < 8 {
     raise CryptoError("RSA key too short for this hash")
@@ -126,7 +169,7 @@ pub impl JwtSigner for RsaSigner with fn sign(
   }
 
   // 3. m = bytes_to_int(EM)
-  let m = BigInt::from_octets(em.unsafe_reinterpret_as_bytes().view())
+  let m = unsigned_bigint_from_bytes(em.unsafe_reinterpret_as_bytes().view())
 
   // 4. s = m^d mod n
   let s = m.pow(self.d, modulus=self.n)
@@ -166,8 +209,8 @@ pub fn RsaVerifier::new(
     _ => raise UnsupportedAlgorithm(alg)
   }
   {
-    n: BigInt::from_octets(n_bytes),
-    e: BigInt::from_octets(e_bytes),
+    n: unsigned_bigint_from_bytes(n_bytes),
+    e: unsigned_bigint_from_bytes(e_bytes),
     hash_len,
     alg: alg_name,
   }
@@ -185,7 +228,7 @@ pub impl JwtVerifier for RsaVerifier with fn verify(
   signature : BytesView,
 ) -> Bool {
   // 1. s^e mod n
-  let sig_int = BigInt::from_octets(signature)
+  let sig_int = unsigned_bigint_from_bytes(signature)
   let m = sig_int.pow(self.e, modulus=self.n)
   let k = (self.n.bit_length() + 7) / 8
   let em_decoded = m.to_octets(length=k).to_fixedarray()
@@ -198,7 +241,7 @@ pub impl JwtVerifier for RsaVerifier with fn verify(
     _ => return false
   }
   let prefix = der_prefix(self.hash_len)
-  let t_len = 2 + 8 + prefix.length() + hash.length()
+  let t_len = prefix.length() + hash.length()
   let ps_len = k - t_len - 3
   if ps_len < 8 {
     return false

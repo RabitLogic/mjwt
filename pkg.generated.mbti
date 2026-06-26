@@ -78,6 +78,8 @@ pub fn JwtClaims::get_issuer(Self) -> String?
 pub fn JwtClaims::get_jwt_id(Self) -> String?
 pub fn JwtClaims::get_not_before(Self) -> Int64?
 pub fn JwtClaims::get_subject(Self) -> String?
+pub fn JwtClaims::is_expired(Self) -> Bool
+pub fn JwtClaims::is_now_valid(Self) -> Bool
 pub fn JwtClaims::new() -> Self
 pub fn JwtClaims::set(Self, String, Json) -> Unit
 pub fn JwtClaims::set_audience(Self, String) -> Unit

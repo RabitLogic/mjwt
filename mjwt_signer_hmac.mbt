@@ -1,13 +1,29 @@
 ///|
 /// HMAC-based signer & verifier for JWT.
 ///
+/// Uses MoonBit's `@crypto.hmac` internally.  HS384 and HS512 use the
+/// self-implemented `Sha384` / `Sha512` hashers (see `mjwt_hash_sha512.mbt`)
+/// which are verified with NIST known-answer tests and RFC 4231 vectors.
+///
 /// # Supported algorithms
 ///
-/// | Algorithm | Hash    | Status |
-/// |-----------|---------|--------|
-/// | HS256     | SHA-256 | ✅     |
-/// | HS384     | SHA-384 | ✅     |
-/// | HS512     | SHA-512 | ✅     |
+/// | Algorithm | Hash    | Test vectors          |
+/// |-----------|---------|-----------------------|
+/// | HS256     | SHA-256 | ✅ RFC 4231 Test Case 2 |
+/// | HS384     | SHA-384 | ✅ RFC 4231 Test Case 2 |
+/// | HS512     | SHA-512 | ✅ RFC 4231 Test Case 2 |
+///
+/// # Panics
+/// None — errors are returned via `raise JwtError`.
+///
+/// # Example
+///
+/// ```moonbit
+/// let s = HmacSigner::new("HS256", "my-secret")?
+/// let v = HmacVerifier::new("HS256", "my-secret")?
+/// let token = @mjwt.encode_with(s, my_claims)?
+/// let decoded = @mjwt.decode_with(v, token)?
+/// ```
 
 // =============================================================================
 //  HmacSigner
