@@ -1,0 +1,12 @@
+import {
+  "moonbitlang/x/codec/base64",
+  "moonbitlang/x/crypto",
+  "moonbitlang/x/json5",
+  "moonbitlang/core/json",
+  "moonbitlang/x/encoding",
+}
+
+import {
+  "moonbitlang/core/test",
+  "moonbitlang/core/debug",
+} for "test"
