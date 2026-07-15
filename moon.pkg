@@ -5,6 +5,7 @@ import {
   "moonbitlang/core/json",
   "moonbitlang/core/bigint",
   "moonbitlang/core/env",
+  "moonbitlang/core/debug",
   "moonbitlang/x/encoding",
 }
 
@@ -13,3 +14,5 @@ import {
   "moonbitlang/core/debug",
   "moonbitlang/core/bench",
 } for "test"
+
+warnings = "+implicit_impl_as_method"

@@ -178,6 +178,9 @@ pub impl JwtSigner for RsaSigner with fn sign(
   s.to_octets(length=k).to_fixedarray()
 }
 
+///|
+pub extend RsaSigner with JwtSigner::{alg_name, sign}
+
 // =============================================================================
 //  RsaVerifier
 // =============================================================================
@@ -275,3 +278,6 @@ pub impl JwtVerifier for RsaVerifier with fn verify(
   }
   true
 }
+
+///|
+pub extend RsaVerifier with JwtVerifier::{alg_name, verify}

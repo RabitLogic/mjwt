@@ -2,8 +2,12 @@
 /// # mjwt — JSON Web Token library for MoonBit
 ///
 /// A pure-MoonBit JWT library with extensible trait-based signer architecture.
-/// Supports HMAC, RSA, and ECDSA signing algorithms.  Passes **44 unit tests**
-/// and is cross-validated against a Python reference implementation.
+/// Supports HMAC, RSA, and ECDSA signing algorithms.  Passes **32 unit tests**
+/// and is cross-validated against a Python reference implementation — HMAC
+/// tokens are verified to interoperate in both directions.
+///
+/// > Requires MoonBit **v0.10.4+** (uses `extend` syntax for explicit trait
+/// > method mounting).
 ///
 /// ## Supported algorithms
 ///
@@ -78,12 +82,14 @@
 ///
 /// ## Extending
 ///
-/// Implement `JwtSigner` / `JwtVerifier` on any type to add a custom algorithm:
+/// Implement `JwtSigner` / `JwtVerifier` on any type, and use `extend` to
+/// expose trait methods (required since MoonBit v0.10.4):
 ///
 /// ```moonbit nocheck
 /// struct MySigner { key : Bytes }
 /// impl JwtSigner for MySigner with fn alg_name(_) -> String { "HS256" }
 /// impl JwtSigner for MySigner with fn sign(self, msg) -> .. { .. }
+/// pub extend MySigner with JwtSigner::{alg_name, sign}
 /// let token = @mjwt.encode_with(MySigner { key }, claims)
 /// ```
 
@@ -111,6 +117,12 @@ pub suberror JwtError {
   /// Cryptographic operation failed (e.g. key too short)
   CryptoError(String)
 } derive(Debug, Eq)
+
+///|
+pub extend JwtError with @moonbitlang/core/debug.Debug::{to_repr}
+
+///|
+pub extend JwtError with Eq::{not_equal, equal}
 
 ///|
 pub fn JwtError::to_string(self : JwtError) -> String {

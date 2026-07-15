@@ -303,6 +303,15 @@ pub impl @crypto.CryptoHasher for Sha512 with fn finalize_into(
 }
 
 ///|
+pub extend Sha512 with @crypto.CryptoHasher::{
+  size,
+  block_size,
+  reset,
+  update,
+  finalize_into,
+}
+
+///|
 /// Convenience: one-shot SHA-512 hash.
 pub fn sha512(data : BytesView) -> FixedArray[Byte] {
   let h = Sha512::new()
@@ -364,6 +373,15 @@ pub impl @crypto.CryptoHasher for Sha384 with fn finalize_into(
   for i = 0; i < 48; i = i + 1 {
     buf[offset + i] = out[i]
   }
+}
+
+///|
+pub extend Sha384 with @crypto.CryptoHasher::{
+  size,
+  block_size,
+  reset,
+  update,
+  finalize_into,
 }
 
 ///|

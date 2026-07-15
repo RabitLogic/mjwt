@@ -75,6 +75,9 @@ pub impl JwtSigner for HmacSigner with fn sign(
   }
 }
 
+///|
+pub extend HmacSigner with JwtSigner::{alg_name, sign}
+
 // =============================================================================
 //  HmacVerifier
 // =============================================================================
@@ -126,3 +129,6 @@ pub impl JwtVerifier for HmacVerifier with fn verify(
   }
   true
 }
+
+///|
+pub extend HmacVerifier with JwtVerifier::{alg_name, verify}

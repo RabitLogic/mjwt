@@ -35,6 +35,10 @@ pub suberror JwtError {
   UnsupportedAlgorithm(String)
   CryptoError(String)
 } derive(Eq, @debug.Debug)
+pub fn JwtError::equal(Self, Self) -> Bool
+pub fn JwtError::not_equal(Self, Self) -> Bool
+#as_free_fn
+pub fn JwtError::to_repr(Self) -> @debug.Repr
 pub fn JwtError::to_string(Self) -> String
 
 // Types and methods
@@ -43,28 +47,36 @@ pub struct EcSigner {
   public_key_x : Scalar256
   public_key_y : Scalar256
 }
+pub fn EcSigner::alg_name(Self) -> String
 pub fn EcSigner::new_p256(BytesView, BytesView) -> Self raise JwtError
+pub fn EcSigner::sign(Self, BytesView) -> FixedArray[Byte] raise JwtError
 pub impl JwtSigner for EcSigner
 
 pub struct EcVerifier {
   public_key_x : Scalar256
   public_key_y : Scalar256
 }
+pub fn EcVerifier::alg_name(Self) -> String
 pub fn EcVerifier::new_p256(BytesView) -> Self raise JwtError
+pub fn EcVerifier::verify(Self, BytesView, BytesView) -> Bool
 pub impl JwtVerifier for EcVerifier
 
 pub struct HmacSigner {
   alg_name : String
   key : Bytes
 }
+pub fn HmacSigner::alg_name(Self) -> String
 pub fn HmacSigner::new(String, StringView) -> Self raise JwtError
+pub fn HmacSigner::sign(Self, BytesView) -> FixedArray[Byte] raise JwtError
 pub impl JwtSigner for HmacSigner
 
 pub struct HmacVerifier {
   alg_name : String
   key : Bytes
 }
+pub fn HmacVerifier::alg_name(Self) -> String
 pub fn HmacVerifier::new(String, StringView) -> Self raise JwtError
+pub fn HmacVerifier::verify(Self, BytesView, BytesView) -> Bool
 pub impl JwtVerifier for HmacVerifier
 
 pub(all) struct JwtClaims {
@@ -109,7 +121,9 @@ pub struct RsaSigner {
   hash_len : Int
   alg : String
 }
+pub fn RsaSigner::alg_name(Self) -> String
 pub fn RsaSigner::new(BytesView, BytesView, String) -> Self raise JwtError
+pub fn RsaSigner::sign(Self, BytesView) -> FixedArray[Byte] raise JwtError
 pub impl JwtSigner for RsaSigner
 
 pub struct RsaVerifier {
@@ -118,7 +132,9 @@ pub struct RsaVerifier {
   hash_len : Int
   alg : String
 }
+pub fn RsaVerifier::alg_name(Self) -> String
 pub fn RsaVerifier::new(BytesView, BytesView, String) -> Self raise JwtError
+pub fn RsaVerifier::verify(Self, BytesView, BytesView) -> Bool
 pub impl JwtVerifier for RsaVerifier
 
 pub struct Scalar256 {
@@ -132,13 +148,23 @@ pub fn Scalar256::zero() -> Self
 pub struct Sha384 {
   ctx : Sha512Ctx
 }
+pub fn Sha384::block_size(Self) -> Int
+pub fn Sha384::finalize_into(Self, FixedArray[Byte], offset~ : Int) -> Unit
 pub fn Sha384::new() -> Self
+pub fn Sha384::reset(Self) -> Unit
+pub fn Sha384::size(Self) -> Int
+pub fn Sha384::update(Self, BytesView) -> Unit
 pub impl @crypto.CryptoHasher for Sha384
 
 pub struct Sha512 {
   ctx : Sha512Ctx
 }
+pub fn Sha512::block_size(Self) -> Int
+pub fn Sha512::finalize_into(Self, FixedArray[Byte], offset~ : Int) -> Unit
 pub fn Sha512::new() -> Self
+pub fn Sha512::reset(Self) -> Unit
+pub fn Sha512::size(Self) -> Int
+pub fn Sha512::update(Self, BytesView) -> Unit
 pub impl @crypto.CryptoHasher for Sha512
 
 type Sha512Ctx

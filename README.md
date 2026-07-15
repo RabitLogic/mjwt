@@ -1,8 +1,13 @@
 # RabitLogic/mjwt — JWT library for MoonBit
 
 A JSON Web Token (JWT) library written in **pure MoonBit**, with extensible
-trait-based signer architecture. Passes **44 unit tests** and is cross-validated
-against a Python reference implementation.
+trait-based signer architecture. Passes **32 unit tests** and is
+[cross-validated](examples/exact_validate.py) against a Python reference
+implementation — HMAC tokens are verified to interoperate in both directions.
+
+> Requires MoonBit **v0.10.4+** (uses `extend` syntax for explicit trait method
+> mounting; the old implicit method mounting behavior from v0.10.3 and earlier
+> is deprecated in this version).
 
 ## Features
 
@@ -129,18 +134,23 @@ Key format: 32-byte private key, 64-byte uncompressed public key (x ‖ y).
 | `mjwt_signer_hmac.mbt` | `HmacSigner` / `HmacVerifier` |
 | `mjwt_signer_rsa.mbt` | `RsaSigner` / `RsaVerifier` |
 | `mjwt_signer_ecdsa.mbt` | `EcSigner` / `EcVerifier` (P-256) |
-| `mjwt_test.mbt` | 32 unit tests + 4 benchmarks (skipped by default) |
+| `mjwt_test.mbt` | 32 unit tests |
+| `mjwt_bench_test.mbt` | 4 benchmarks |
 | `examples/example_usage.mbt` | Runnable usage examples (12 tests) |
 | `examples/py_compare.py` | Python cross-validation script |
 
 ## Adding a custom signer
 
-Implement the `JwtSigner` / `JwtVerifier` traits on any type:
+Implement the `JwtSigner` / `JwtVerifier` traits on any type, and use `extend`
+to expose trait methods via dot syntax (required since MoonBit v0.10.4):
 
-```moonbit
+```moonbit nocheck
 struct MySigner { key : Bytes }
 impl JwtSigner for MySigner with fn alg_name(_) -> String { "HS256" }
 impl JwtSigner for MySigner with fn sign(self, msg) -> .. { .. }
+
+// Mount trait methods as dot-syntax methods on MySigner
+pub extend MySigner with JwtSigner::{alg_name, sign}
 
 let token = @mjwt.encode_with(MySigner { key }, claims)
 ```
@@ -148,14 +158,41 @@ let token = @mjwt.encode_with(MySigner { key }, claims)
 ## Development
 
 ```bash
-moon test              # run 44 tests
-moon bench             # run benchmarks
+moon test              # run 32 tests
+moon bench             # run 4 benchmarks
+moon check             # check for warnings
 moon fmt               # format code
 moon info              # update interface (.mbti) files
+```
 
-# Cross-validation
+## Performance
+
+| Algorithm | Operation    | Time (mean ± σ)        |
+|-----------|-------------|------------------------|
+| **HS256** | encode      | `4.10 µs ± 260 ns`     |
+| **HS256** | decode      | `4.13 µs ± 339 ns`     |
+| **RS256** | sign        | `29.79 ms ± 684 µs`    |
+| **ES256** | sign (v0.2) | `26.56 ms ± 2.06 ms`   |
+
+> ES256 received a **~28× speedup** in v0.2.0 by switching from affine to
+> Jacobian projective coordinates (741 ms → 27 ms).
+
+Run benchmarks with `moon bench`.
+
+## Cross-validation
+
+MoonBit mjwt tokens are verified to be cryptographically compatible with Python:
+
+```bash
+# Python self-test + MoonBit interoperability test
+python3 examples/exact_validate.py
+
+# Legacy format check (Python only)
 python3 examples/py_compare.py
 ```
+
+Tested algorithms: **HS256**, **HS384**, **HS512** — Python-generated tokens are
+successfully decoded and verified by MoonBit, and vice versa.
 
 ## License
 

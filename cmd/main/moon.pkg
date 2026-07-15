@@ -1,7 +1,0 @@
-// import {
-//   "RabitLogic/mjwt" @lib,
-// }
-
-options(
-  "is-main": true,
-)
