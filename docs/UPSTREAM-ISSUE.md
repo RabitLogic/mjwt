@@ -1,25 +1,31 @@
-# Upstream issue: MoonBit core `BigInt::from_octets` zero bug
-
-File this at <https://github.com/moonbitlang/core/issues/new>. Paste the body
-below verbatim. This documents a security-relevant core-library bug that `mjwt`
-works around (see `SECURITY.md` → "Known MoonBit core bug (worked around)").
-
----
-
-**Title:** `BigInt::from_octets` returns non-canonical zero for all-zero input (breaks `==`, `<`, `to_string`)
+**Title:** `BigInt::from_octets` produces a non-canonical zero for all-zero input on the native backend (breaks `==`, `<`, `to_string`)
 
 **Environment**
 - MoonBit version: `0.1.20260729`
+- Affected backend: **native** (`bigint_nonjs.mbt`). The JS/wasm backend
+  (`bigint_js.mbt`) parses via `parse_bigint(…, base=16)` and is unaffected.
 
 **Summary**
-`BigInt::from_octets` returns a **non-canonical zero** when given an all-zero
-byte string: the result has `len > 0` with all-zero limbs. This breaks `==`,
-`<`, and `to_string` on that value, which is a **security-relevant** footgun:
-crypto code that rejects zero scalars/signatures (e.g. `r == 0`, `s == 0`,
-`d == 0` checks in ECDSA) silently fails because the byte-derived zero compares
-unequal to the canonical `0N`.
+On the native backend, `BigInt::from_octets` returns a **non-canonical zero**
+when the input byte string is all zeros: the result keeps `len > 0` while every
+limb is `0`. Because `Eq` / `Compare` compare `len` first, this value never
+equals the canonical `0N` (`len == 0`), and `to_string` crashes.
 
-**Steps to reproduce**
+This is a **security-relevant** footgun: cryptographic code that rejects zero
+scalars/signatures (e.g. `r == 0`, `s == 0`, `d == 0` checks in ECDSA) silently
+fails to reject, since the byte-derived zero compares unequal to the canonical
+`0N`.
+
+**Expected vs actual**
+
+| Operation | Expected | Actual |
+|---|---|---|
+| `from_octets(b"\x00\x00\x00\x00") == 0N` | `true` | `false` |
+| `from_octets(b"\x00\x00\x00\x00").to_string()` | `"0"` | panics (`PanicError`) |
+| `from_octets(b"\x00\x00\x00\x00") < 1N` | `true` | `false` (compares by `len`: 3 vs 1) |
+
+**Steps to reproduce** (native target)
+
 ```moonbit
 let z = @bigint.BigInt::from_octets(b"\x00\x00\x00\x00")
 println(z.to_string()) // PanicError (SIGABRT)
@@ -27,27 +33,33 @@ println(z == 0N)       // false — should be true
 ```
 
 **Root cause** (`bigint_nonjs.mbt`, `BigInt::from_octets`)
-For all-zero input the "top limb is zero" branch runs and sets
-`len = max(1, limbs_len - 1)`, leaving `len > 0` while all limbs are `0`.
-`Eq` / `Compare` compare `len` first, so this value never equals the canonical
-`0N` (`len == 0`), and `to_string` reads `v[v_idx - 1] == 0` then underflows.
+After building `limbs`, the "top limb is zero" branch sets
+`len = max(1, limbs_len - 1)`. For an all-zero input this leaves
+`len = limbs_len - 1 > 0` with all-zero limbs, so the value is a non-canonical
+zero. `Eq` / `Compare` compare `len` before the limbs, and `to_string` indexes
+`v[v_idx - 1]` assuming a non-zero top limb.
 
 **Proposed fix**
-Return the canonical `zero` when all limbs are zero, e.g. an early return in
-`from_octets`:
+Return the canonical `zero` when every limb is zero. The check can be folded
+into the existing limb-building loop so the all-zero case is handled without an
+extra pass over the built array:
 
 ```moonbit
-// after building `limbs`:
-let mut all_zero = true
+// in BigInt::from_octets, after building `limbs`:
+let mut nonzero = false
 for i = 0; i < limbs_len; i = i + 1 {
-  if limbs[i] != 0 { all_zero = false; break }
+  if limbs[i] != 0 { nonzero = true; break }
 }
-if all_zero { return zero }
+if not nonzero { return zero }
 ```
 
-**Impact**
-Any code converting byte strings to `BigInt` where the input may legitimately
-be all zeros (hash outputs, scalar/signature parsing, key material). In
-`RabitLogic/mjwt` this would have silently defeated the `r=0` / `s=0` / `d=0`
-ECDSA rejection checks; we currently work around it with a normalizing wrapper
-(`bi_from_octets`) in both `ecdsa/` and `rsa/` packages.
+**Severity**
+Low-to-medium. Not directly exploitable, but it silently disables zero-value
+guard checks (e.g. ECDSA `r`/`s`/`d` rejection) in code that converts byte
+strings to `BigInt`, which can turn a "reject invalid input" path into an
+accepted one.
+
+**Workaround (affected users)**
+Normalize all-zero byte strings to the canonical `0N` around `from_octets`.
+`RabitLogic/mjwt` does this in a private `bi_from_octets` helper in both the
+`ecdsa/` and `rsa/` packages (see `SECURITY.md`).
