@@ -1,0 +1,37 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "RabitLogic/mjwt/ecdsa"
+
+import {
+  "RabitLogic/mjwt",
+}
+
+// Values
+
+// Errors
+
+// Types and methods
+pub struct EcSigner {
+  private_key : Scalar256
+  public_key_x : Scalar256
+  public_key_y : Scalar256
+}
+pub fn EcSigner::alg_name(Self) -> String
+pub fn EcSigner::new_p256(BytesView, BytesView) -> Self raise @mjwt.JwtError
+pub fn EcSigner::sign(Self, BytesView) -> FixedArray[Byte] raise @mjwt.JwtError
+pub impl @mjwt.JwtSigner for EcSigner
+
+pub struct EcVerifier {
+  public_key_x : Scalar256
+  public_key_y : Scalar256
+}
+pub fn EcVerifier::alg_name(Self) -> String
+pub fn EcVerifier::new_p256(BytesView) -> Self raise @mjwt.JwtError
+pub fn EcVerifier::verify(Self, BytesView, BytesView) -> Bool
+pub impl @mjwt.JwtVerifier for EcVerifier
+
+type Scalar256
+
+// Type aliases
+
+// Traits
+

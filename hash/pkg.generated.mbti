@@ -1,0 +1,43 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "RabitLogic/mjwt/hash"
+
+import {
+  "moonbitlang/x/crypto",
+}
+
+// Values
+pub fn sha384(BytesView) -> FixedArray[Byte]
+
+pub fn sha512(BytesView) -> FixedArray[Byte]
+
+// Errors
+
+// Types and methods
+pub struct Sha384 {
+  ctx : Sha512Ctx
+}
+pub fn Sha384::block_size(Self) -> Int
+pub fn Sha384::finalize_into(Self, FixedArray[Byte], offset~ : Int) -> Unit
+pub fn Sha384::new() -> Self
+pub fn Sha384::reset(Self) -> Unit
+pub fn Sha384::size(Self) -> Int
+pub fn Sha384::update(Self, BytesView) -> Unit
+pub impl @crypto.CryptoHasher for Sha384
+
+pub struct Sha512 {
+  ctx : Sha512Ctx
+}
+pub fn Sha512::block_size(Self) -> Int
+pub fn Sha512::finalize_into(Self, FixedArray[Byte], offset~ : Int) -> Unit
+pub fn Sha512::new() -> Self
+pub fn Sha512::reset(Self) -> Unit
+pub fn Sha512::size(Self) -> Int
+pub fn Sha512::update(Self, BytesView) -> Unit
+pub impl @crypto.CryptoHasher for Sha512
+
+type Sha512Ctx
+
+// Type aliases
+
+// Traits
+

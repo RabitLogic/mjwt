@@ -1,0 +1,40 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "RabitLogic/mjwt/rsa"
+
+import {
+  "RabitLogic/mjwt",
+  "moonbitlang/core/bigint",
+}
+
+// Values
+
+// Errors
+
+// Types and methods
+pub struct RsaSigner {
+  n : @bigint.BigInt
+  d : @bigint.BigInt
+  e : @bigint.BigInt
+  hash_len : Int
+  alg : String
+}
+pub fn RsaSigner::alg_name(Self) -> String
+pub fn RsaSigner::new(BytesView, BytesView, String, e_bytes? : Bytes) -> Self raise @mjwt.JwtError
+pub fn RsaSigner::sign(Self, BytesView) -> FixedArray[Byte] raise @mjwt.JwtError
+pub impl @mjwt.JwtSigner for RsaSigner
+
+pub struct RsaVerifier {
+  n : @bigint.BigInt
+  e : @bigint.BigInt
+  hash_len : Int
+  alg : String
+}
+pub fn RsaVerifier::alg_name(Self) -> String
+pub fn RsaVerifier::new(BytesView, BytesView, String) -> Self raise @mjwt.JwtError
+pub fn RsaVerifier::verify(Self, BytesView, BytesView) -> Bool
+pub impl @mjwt.JwtVerifier for RsaVerifier
+
+// Type aliases
+
+// Traits
+

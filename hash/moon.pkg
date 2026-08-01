@@ -1,0 +1,8 @@
+import {
+  "moonbitlang/x/crypto",
+}
+
+import {
+  "moonbitlang/core/test",
+  "moonbitlang/x/encoding",
+} for "test"

@@ -113,6 +113,7 @@ struct Sha512Ctx {
   buf : FixedArray[Byte]
   mut buf_idx : Int
   hsize : Int // output bytes: 64 for SHA-512, 48 for SHA-384
+  w : FixedArray[UInt64] // reusable 80-word message schedule
 }
 
 ///|
@@ -127,6 +128,7 @@ fn ctx_new(iv : FixedArray[UInt64], hsize : Int) -> Sha512Ctx {
     buf: FixedArray::make(128, Byte::default()),
     buf_idx: 0,
     hsize,
+    w: FixedArray::make(80, 0),
   }
 }
 
@@ -138,7 +140,7 @@ fn ctx_new(iv : FixedArray[UInt64], hsize : Int) -> Sha512Ctx {
 /// - Uses the message schedule W[0..79] expanded from the 16 input words
 /// - Updates `ctx.reg` in-place (feed-forward: new = old + working vars)
 fn block_compress(ctx : Sha512Ctx) -> Unit {
-  let w : FixedArray[UInt64] = FixedArray::make(80, 0)
+  let w = ctx.w
   for i = 0; i < 16; i = i + 1 {
     w[i] = u8_8_to_u64_be(ctx.buf, i * 8)
   }
@@ -199,9 +201,8 @@ fn ctx_update(ctx : Sha512Ctx, data : BytesView) -> Unit {
     } else {
       128 - ctx.buf_idx
     }
-    for j = 0; j < take; j = j + 1 {
-      ctx.buf[ctx.buf_idx + j] = data[off + j]
-    }
+    // Bulk copy instead of a byte-by-byte loop.
+    ctx.buf.blit_from_bytesview(ctx.buf_idx, data[off:off + take])
     ctx.buf_idx = ctx.buf_idx + take
     off = off + take
     if ctx.buf_idx == 128 {

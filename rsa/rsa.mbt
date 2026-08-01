@@ -73,10 +73,12 @@ fn der_prefix(hash_len : Int) -> FixedArray[Byte] {
 ///
 /// - `n` — RSA modulus
 /// - `d` — private exponent
+/// - `e` — public exponent (used only for blinding)
 /// - `hash_len` — output length of the hash (32=SHA256, 48=SHA384, 64=SHA512)
 pub struct RsaSigner {
   n : BigInt
   d : BigInt
+  e : BigInt
   hash_len : Int
   alg : String
 }
@@ -89,6 +91,24 @@ pub struct RsaSigner {
 /// - `alg` — `"RS256"`, `"RS384"`, or `"RS512"`
 
 ///|
+/// `BigInt::from_octets` wrapper working around the MoonBit core zero bug (also
+/// present in `ecdsa/ecdsa.mbt`): an all-zero byte string yields a non-canonical
+/// zero that breaks `==`/`<`/`to_string`. All-zero input is normalized to `0N`.
+fn bi_from_octets(data : BytesView, signum? : Int = 1) -> BigInt {
+  let mut all_zero = true
+  for i = 0; i < data.length(); i = i + 1 {
+    if data[i] != b'\x00' {
+      all_zero = false
+      break
+    }
+  }
+  if all_zero {
+    return 0N
+  }
+  BigInt::from_octets(data, signum~)
+}
+
+///|
 /// Convert big-endian bytes to an unsigned `BigInt`.
 ///
 /// MoonBit's `BigInt::from_octets` interprets bytes as signed (two's complement),
@@ -97,13 +117,14 @@ pub struct RsaSigner {
 /// exponent values that are inherently unsigned.
 ///
 /// This function prepends a `\x00` byte to force an unsigned interpretation,
-/// yielding the correct positive `BigInt`.
+/// then delegates to `bi_from_octets` (which also normalizes all-zero input to
+/// the canonical `0N`, working around the MoonBit core `from_octets` zero bug).
 fn unsigned_bigint_from_bytes(data : BytesView) -> BigInt {
   let padded = FixedArray::make(data.length() + 1, b'\x00')
   for i = 0; i < data.length(); i = i + 1 {
     padded[i + 1] = data[i]
   }
-  BigInt::from_octets(padded.unsafe_reinterpret_as_bytes().view())
+  bi_from_octets(padded.unsafe_reinterpret_as_bytes().view())
 }
 
 ///|
@@ -111,34 +132,97 @@ pub fn RsaSigner::new(
   n_bytes : BytesView,
   d_bytes : BytesView,
   alg : String,
-) -> RsaSigner raise JwtError {
+  e_bytes? : Bytes = b"\x01\x00\x01",
+) -> RsaSigner raise @mjwt.JwtError {
   let (hash_len, alg_name) = match alg {
     "RS256" => (32, "RS256")
     "RS384" => (48, "RS384")
     "RS512" => (64, "RS512")
-    _ => raise UnsupportedAlgorithm(alg)
+    _ => raise @mjwt.UnsupportedAlgorithm(alg)
   }
   let n = unsigned_bigint_from_bytes(n_bytes)
   let d = unsigned_bigint_from_bytes(d_bytes)
-  { n, d, hash_len, alg: alg_name }
+  if n.bit_length() < 2048 {
+    raise @mjwt.CryptoError("RSA modulus must be at least 2048 bits")
+  }
+  let e = unsigned_bigint_from_bytes(e_bytes.view())
+  { n, d, e, hash_len, alg: alg_name }
 }
 
 ///|
-pub impl JwtSigner for RsaSigner with fn alg_name(self : RsaSigner) -> String {
+/// Extended Euclidean algorithm. Returns (g, x, y) such that a*x + b*y = g
+/// where g = gcd(a, b). Used to compute modular inverses for RSA blinding.
+fn egcd(a : BigInt, b : BigInt) -> (BigInt, BigInt, BigInt) {
+  let mut old_r = a
+  let mut r = b
+  let mut old_s = 1N
+  let mut s = 0N
+  let mut old_t = 0N
+  let mut t = 1N
+  while r != 0N {
+    let q = old_r / r
+    let tmp_r = old_r - q * r
+    old_r = r
+    r = tmp_r
+    let tmp_s = old_s - q * s
+    old_s = s
+    s = tmp_s
+    let tmp_t = old_t - q * t
+    old_t = t
+    t = tmp_t
+  }
+  (old_r, old_s, old_t)
+}
+
+///|
+/// Modular inverse of `a` modulo `m`, or `None` when gcd(a, m) != 1.
+fn mod_inverse(a : BigInt, m : BigInt) -> BigInt? {
+  let (g, x, _) = egcd(a, m)
+  if g != 1N {
+    return None
+  }
+  Some((x % m + m) % m)
+}
+
+///|
+/// Generate a random RSA blinding pair (r, r^-1 mod n) with gcd(r, n) = 1.
+/// The blinding factor `r` must be secret and unpredictable, hence it is drawn
+/// from `@random.Rand::new()`, which seeds from OS entropy.
+fn blind_pair(n : BigInt) -> (BigInt, BigInt) {
+  let rand = @random.Rand::new()
+  blind_pair_step(rand, n)
+}
+
+///|
+/// One rejection-sampling step for `blind_pair` (retries if gcd(r, n) != 1,
+/// which happens with probability ~2^-1024 for a 2048-bit modulus).
+fn blind_pair_step(rand : @random.Rand, n : BigInt) -> (BigInt, BigInt) {
+  let r = rand.bigint(n.bit_length()).mod(n)
+  if r >= 2N {
+    match mod_inverse(r, n) {
+      Some(inv) => return (r, inv)
+      None => ()
+    }
+  }
+  blind_pair_step(rand, n)
+}
+
+///|
+pub impl @mjwt.JwtSigner for RsaSigner with fn alg_name(self : RsaSigner) -> String {
   self.alg
 }
 
 ///|
-pub impl JwtSigner for RsaSigner with fn sign(
+pub impl @mjwt.JwtSigner for RsaSigner with fn sign(
   self : RsaSigner,
   message : BytesView,
-) -> FixedArray[Byte] raise JwtError {
+) -> FixedArray[Byte] raise @mjwt.JwtError {
   // 1. Hash
   let hash = match self.hash_len {
     32 => @crypto.sha256(message)
-    48 => sha384(message)
-    64 => sha512(message)
-    _ => raise UnsupportedAlgorithm(self.alg)
+    48 => @hash.sha384(message)
+    64 => @hash.sha512(message)
+    _ => raise @mjwt.UnsupportedAlgorithm(self.alg)
   }
   let prefix = der_prefix(self.hash_len)
   // k = octet length of the RSA modulus
@@ -151,7 +235,7 @@ pub impl JwtSigner for RsaSigner with fn sign(
   let t_len = prefix.length() + hash.length()
   let ps_len = k - t_len - 3
   if ps_len < 8 {
-    raise CryptoError("RSA key too short for this hash")
+    raise @mjwt.CryptoError("RSA key too short for this hash")
   }
 
   let em = FixedArray::make(k, b'\x00')
@@ -171,15 +255,22 @@ pub impl JwtSigner for RsaSigner with fn sign(
   // 3. m = bytes_to_int(EM)
   let m = unsigned_bigint_from_bytes(em.unsafe_reinterpret_as_bytes().view())
 
-  // 4. s = m^d mod n
-  let s = m.pow(self.d, modulus=self.n)
+  // 4. s = m^d mod n, with RSA blinding to harden the private-key operation
+  //    against timing side channels:
+  //      m'    = m * r^e  (mod n)
+  //      s'    = (m')^d   (mod n)
+  //      s     = s' * r^-1 (mod n)
+  let (r, r_inv) = blind_pair(self.n)
+  let m_blind = (m * r.pow(self.e, modulus=self.n)).mod(self.n)
+  let s_blind = m_blind.pow(self.d, modulus=self.n)
+  let s = (s_blind * r_inv).mod(self.n)
 
   // 5. Output s as k bytes
   s.to_octets(length=k).to_fixedarray()
 }
 
 ///|
-pub extend RsaSigner with JwtSigner::{alg_name, sign}
+pub extend RsaSigner with @mjwt.JwtSigner::{alg_name, sign}
 
 // =============================================================================
 //  RsaVerifier
@@ -204,43 +295,46 @@ pub fn RsaVerifier::new(
   n_bytes : BytesView,
   e_bytes : BytesView,
   alg : String,
-) -> RsaVerifier raise JwtError {
+) -> RsaVerifier raise @mjwt.JwtError {
   let (hash_len, alg_name) = match alg {
     "RS256" => (32, "RS256")
     "RS384" => (48, "RS384")
     "RS512" => (64, "RS512")
-    _ => raise UnsupportedAlgorithm(alg)
+    _ => raise @mjwt.UnsupportedAlgorithm(alg)
   }
-  {
-    n: unsigned_bigint_from_bytes(n_bytes),
-    e: unsigned_bigint_from_bytes(e_bytes),
-    hash_len,
-    alg: alg_name,
+  let n = unsigned_bigint_from_bytes(n_bytes)
+  if n.bit_length() < 2048 {
+    raise @mjwt.CryptoError("RSA modulus must be at least 2048 bits")
   }
+  { n, e: unsigned_bigint_from_bytes(e_bytes), hash_len, alg: alg_name }
 }
 
 ///|
-pub impl JwtVerifier for RsaVerifier with fn alg_name(self : RsaVerifier) -> String {
+pub impl @mjwt.JwtVerifier for RsaVerifier with fn alg_name(self : RsaVerifier) -> String {
   self.alg
 }
 
 ///|
-pub impl JwtVerifier for RsaVerifier with fn verify(
+pub impl @mjwt.JwtVerifier for RsaVerifier with fn verify(
   self : RsaVerifier,
   message : BytesView,
   signature : BytesView,
 ) -> Bool {
+  let k = (self.n.bit_length() + 7) / 8
+  // Reject signatures that cannot fit within the modulus early.
+  if signature.length() > k {
+    return false
+  }
   // 1. s^e mod n
   let sig_int = unsigned_bigint_from_bytes(signature)
   let m = sig_int.pow(self.e, modulus=self.n)
-  let k = (self.n.bit_length() + 7) / 8
   let em_decoded = m.to_octets(length=k).to_fixedarray()
 
   // 2. Hash the message
   let hash = match self.hash_len {
     32 => @crypto.sha256(message)
-    48 => sha384(message)
-    64 => sha512(message)
+    48 => @hash.sha384(message)
+    64 => @hash.sha512(message)
     _ => return false
   }
   let prefix = der_prefix(self.hash_len)
@@ -250,34 +344,28 @@ pub impl JwtVerifier for RsaVerifier with fn verify(
     return false
   }
 
-  // 3. Verify EM = 0x00 || 0x01 || PS || 0x00 || T
+  // 3. Verify EM = 0x00 || 0x01 || PS || 0x00 || T  (constant-time:
+  //    XOR-accumulate over every byte, no early exit, so the mismatch
+  //    position is not leaked through timing)
   if em_decoded.length() != k {
     return false
   }
-  if em_decoded[0] != b'\x00' || em_decoded[1] != b'\x01' {
-    return false
-  }
+  let mut diff = 0
+  diff = diff | em_decoded[0].to_int() // 0x00
+  diff = diff | (em_decoded[1] ^ b'\x01').to_int() // 0x01
   for i = 0; i < ps_len; i = i + 1 {
-    if em_decoded[2 + i] != b'\xff' {
-      return false
-    }
+    diff = diff | (em_decoded[2 + i] ^ b'\xff').to_int() // PS
   }
-  if em_decoded[2 + ps_len] != b'\x00' {
-    return false
-  }
+  diff = diff | em_decoded[2 + ps_len].to_int() // 0x00 separator
   let di_off = 2 + ps_len + 1
   for i = 0; i < prefix.length(); i = i + 1 {
-    if em_decoded[di_off + i] != prefix[i] {
-      return false
-    }
+    diff = diff | (em_decoded[di_off + i] ^ prefix[i]).to_int()
   }
   for i = 0; i < hash.length(); i = i + 1 {
-    if em_decoded[di_off + prefix.length() + i] != hash[i] {
-      return false
-    }
+    diff = diff | (em_decoded[di_off + prefix.length() + i] ^ hash[i]).to_int()
   }
-  true
+  diff == 0
 }
 
 ///|
-pub extend RsaVerifier with JwtVerifier::{alg_name, verify}
+pub extend RsaVerifier with @mjwt.JwtVerifier::{alg_name, verify}

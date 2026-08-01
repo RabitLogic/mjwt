@@ -1,9 +1,11 @@
 # RabitLogic/mjwt — JWT library for MoonBit
 
 A JSON Web Token (JWT) library written in **pure MoonBit**, with extensible
-trait-based signer architecture. Passes **32 unit tests** and is
+trait-based signer architecture. Passes **58 unit tests** and is
 [cross-validated](examples/exact_validate.py) against a Python reference
-implementation — HMAC tokens are verified to interoperate in both directions.
+implementation — HMAC, ECDSA and RSA tokens are verified to interoperate.
+
+See [SECURITY.md](SECURITY.md) for the threat model and hardening notes.
 
 > Requires MoonBit **v0.10.4+** (uses `extend` syntax for explicit trait method
 > mounting; the old implicit method mounting behavior from v0.10.3 and earlier
@@ -95,20 +97,34 @@ let token    = @mjwt.encode_with(signer, claims)
 
 Key format: 32-byte private key, 64-byte uncompressed public key (x ‖ y).
 
+> The nonce `k` is generated with **standard RFC 6979** (HMAC_DRBG, §3.2),
+> validated against the RFC's published P-256/SHA-256 test vectors (A.2.5).
+> Scalar multiplication uses a **Montgomery ladder**; signatures are normalized
+> to **low-S**; verifiers reject high-S and off-curve public keys.
+> Signatures are cross-validated against Python `cryptography` (P-256, P1363
+> `r‖s` format).
+
 ## Standard claims API
 
 | Method | Claim | RFC 7519 |
 |--------|-------|----------|
 | `set_subject` / `get_subject` | `sub` | §4.1.2 |
 | `set_issuer` / `get_issuer` | `iss` | §4.1.1 |
-| `set_audience` / `get_audience` | `aud` | §4.1.3 |
+| `set_audience` / `get_audience` | `aud` (string) | §4.1.3 |
+| `set_audiences` / `get_audiences` | `aud` (string-or-array) | §4.1.3 |
 | `set_expiration` / `get_expiration` | `exp` | §4.1.4 |
 | `set_not_before` / `get_not_before` | `nbf` | §4.1.5 |
 | `set_issued_at` / `get_issued_at` | `iat` | §4.1.6 |
 | `set_jwt_id` / `get_jwt_id` | `jti` | §4.1.7 |
 | `is_expired` | — | Checks `exp` against `@env.now()` |
 | `is_now_valid` | — | Checks both `nbf` and `exp` |
+| `is_expired_with_leeway` | — | `is_expired` + clock-skew tolerance (seconds) |
+| `is_now_valid_with_leeway` | — | `is_now_valid` + clock-skew tolerance (seconds) |
 | `set` / `get` | arbitrary | Any custom key-value |
+
+> `exp` / `nbf` / `iat` are stored as `Int64` and serialized with their exact
+> decimal representation, so values above `2^53` (beyond `Double` precision)
+> survive encode → decode round-trips losslessly.
 
 ## Architecture
 
@@ -127,17 +143,23 @@ Key format: 32-byte private key, 64-byte uncompressed public key (x ‖ y).
 
 ### File structure
 
-| File | Responsibility |
+| Path | Responsibility |
 |------|---------------|
 | `mjwt.mbt` | Core: errors, traits, `JwtHeader`, `JwtClaims`, `JwtToken`, Base64URL, public API |
-| `mjwt_hash_sha512.mbt` | SHA-384 / SHA-512 (FIPS 180-4, `@crypto.CryptoHasher`) |
 | `mjwt_signer_hmac.mbt` | `HmacSigner` / `HmacVerifier` |
-| `mjwt_signer_rsa.mbt` | `RsaSigner` / `RsaVerifier` |
-| `mjwt_signer_ecdsa.mbt` | `EcSigner` / `EcVerifier` (P-256) |
-| `mjwt_test.mbt` | 32 unit tests |
-| `mjwt_bench_test.mbt` | 4 benchmarks |
+| `hash/sha512.mbt` | SHA-384 / SHA-512 (FIPS 180-4) |
+| `rsa/rsa.mbt` | `RsaSigner` / `RsaVerifier` (blinded signing) |
+| `ecdsa/ecdsa.mbt` | `EcSigner` / `EcVerifier` (P-256, RFC 6979, low-S) |
+| `mjwt_test.mbt` + `mjwt_wbtest.mbt` + `mjwt_fuzz_test.mbt` | Core tests (24 + 8 + 5) |
+| `hash/`, `rsa/`, `ecdsa/` `_test.mbt`/`_wbtest.mbt` | Per-algorithm tests |
+| `SECURITY.md` | Threat model, mitigations, residual risks |
 | `examples/example_usage.mbt` | Runnable usage examples (12 tests) |
 | `examples/py_compare.py` | Python cross-validation script |
+
+> **Migration note (v0.2 → v0.3):** `RsaSigner`/`RsaVerifier` moved to
+> `@mjwt/rsa.*`, `EcSigner`/`EcVerifier` to `@mjwt/ecdsa.*`, and
+> `sha384`/`sha512`/`Sha384`/`Sha512` to `@mjwt/hash.*`. The core HS256 API
+> (`@mjwt.encode/decode/verify`, `@mjwt.HmacSigner`) is unchanged.
 
 ## Adding a custom signer
 
@@ -158,9 +180,10 @@ let token = @mjwt.encode_with(MySigner { key }, claims)
 ## Development
 
 ```bash
-moon test              # run 32 tests
-moon bench             # run 4 benchmarks
+moon test              # run 58 tests
+moon bench             # run 5 benchmarks
 moon check             # check for warnings
+moon coverage analyze  # code coverage
 moon fmt               # format code
 moon info              # update interface (.mbti) files
 ```
@@ -169,13 +192,16 @@ moon info              # update interface (.mbti) files
 
 | Algorithm | Operation    | Time (mean ± σ)        |
 |-----------|-------------|------------------------|
-| **HS256** | encode      | `4.10 µs ± 260 ns`     |
-| **HS256** | decode      | `4.13 µs ± 339 ns`     |
-| **RS256** | sign        | `29.79 ms ± 684 µs`    |
-| **ES256** | sign (v0.2) | `26.56 ms ± 2.06 ms`   |
+| **HS256** | encode      | `4.5 µs`               |
+| **HS256** | decode      | `4.8 µs`               |
+| **RS256** | sign        | `~26 ms` (blinded)      |
+| **ES256** | sign        | `~2.6 ms` (RFC 6979 k + ladder) |
+| **ES256** | verify      | `~5.4 ms` (ladder + low-S) |
 
-> ES256 received a **~28× speedup** in v0.2.0 by switching from affine to
-> Jacobian projective coordinates (741 ms → 27 ms).
+> ES256 uses native `@bigint.BigInt` field arithmetic with Jacobian projective
+> coordinates, roughly **60× faster** than the previous pure-MoonBit limb
+> implementation, with a deterministic RFC 6979 nonce and a Montgomery ladder
+> for constant-time scalar multiplication. RSA signing is blinded.
 
 Run benchmarks with `moon bench`.
 

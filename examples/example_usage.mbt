@@ -175,8 +175,11 @@ test "ex08 ES256 sign & verify" {
     "e4d0d3b67b1e3d378ff8003f899a8bd66b2ee7e7e45fe1d574e030f2e136b791"
   let priv_bytes = BigInt::from_string(priv_key, radix=16).to_octets(length=32)
   let pub_bytes = BigInt::from_string(pub_key, radix=16).to_octets(length=64)
-  let signer = EcSigner::new_p256(priv_bytes.view(), pub_bytes.view())
-  let verifier = EcVerifier::new_p256(pub_bytes.view())
+  let signer = @mjwt/ecdsa.EcSigner::new_p256(
+    priv_bytes.view(),
+    pub_bytes.view(),
+  )
+  let verifier = @mjwt/ecdsa.EcVerifier::new_p256(pub_bytes.view())
 
   let claims = JwtClaims::new()
   claims.set_subject("ecdsa-test")
@@ -196,7 +199,11 @@ test "ex09 RS256 sign" {
   let d_hex = "25248115981eb51298203402e32e715802c2c28b25fa4163f6dfacd06bf41434ec396d5c8f95ecb29d1764cd7bc77d893deb5bbe783c16c6165d13f17492845712f740051fdab755bc2e73bb443ee8396f84fe1a9d77857155c8420bb9fbf62d40cc14c192d31956f9d32e4059d9631adf559668dc01d29a67834c6b73f044e82a0fa0e4de9a3f9b41e1aa2ffb65bb07607b19a2ece782ab6d42d5c233231c4380035509b1c9fd2ad5f203b26efa0a8dfec16b978b0b523c92c92945c257895c0141e512ee93c05c9c9f766eb4864b54d5cd50bd7b7f1a7ac15f11e4243d0af44afde30a4f0535091ff29dcee316977dd2134a5f73600f92fe86e8c2477075d1"
   let n_bytes = BigInt::from_string(n_hex, radix=16).to_octets(length=256)
   let d_bytes = BigInt::from_string(d_hex, radix=16).to_octets(length=256)
-  let signer = RsaSigner::new(n_bytes.view(), d_bytes.view(), "RS256") catch { e => raise e }
+  let signer = @mjwt/rsa.RsaSigner::new(
+    n_bytes.view(),
+    d_bytes.view(),
+    "RS256",
+  ) catch { e => raise e }
   let claims = JwtClaims::new()
   claims.set_subject("rsa-test")
   let token = @mjwt.encode_with(signer, claims)

@@ -99,7 +99,10 @@
 
 ///|
 /// Errors that can occur during JWT encoding, decoding, or verification.
-pub suberror JwtError {
+///
+/// `pub(all)` so that signers living in sub-packages (`@mjwt/rsa`,
+/// `@mjwt/ecdsa`) can construct the error variants they raise.
+pub(all) suberror JwtError {
   /// Malformed compact serialization (not 3 dot-separated parts)
   InvalidFormat(String)
   /// Invalid Base64URL character encountered
@@ -291,13 +294,15 @@ pub fn JwtClaims::get_subject(self : JwtClaims) -> String? {
 
 ///|
 ///  Registered claim **aud** (audience) — identifies the recipients that the JWT
-///  is intended for.  Per RFC 7519 §4.1.3.
+///  is intended for.  Per RFC 7519 §4.1.3. A single audience is stored as a
+///  JSON string.
 pub fn JwtClaims::set_audience(self : JwtClaims, aud : String) -> Unit {
   self.data.set("aud", Json::string(aud))
 }
 
 ///|
-///  Returns the **aud** (audience) value, or `None` if absent.
+///  Returns the **aud** (audience) value as a string, or `None` if absent or if
+///  `aud` is a JSON array (use `get_audiences` for the array form).
 pub fn JwtClaims::get_audience(self : JwtClaims) -> String? {
   match self.data.get("aud") {
     Some(String(s)) => Some(s)
@@ -306,17 +311,106 @@ pub fn JwtClaims::get_audience(self : JwtClaims) -> String? {
 }
 
 ///|
+///  Sets **aud** to a JSON array of audience strings. Per RFC 7519 §4.1.3 a JWT
+///  may list multiple audiences as an array.
+pub fn JwtClaims::set_audiences(self : JwtClaims, auds : Array[String]) -> Unit {
+  let arr : Array[Json] = []
+  for s in auds {
+    arr.push(Json::string(s))
+  }
+  self.data.set("aud", Json::array(arr))
+}
+
+///|
+///  Returns **aud** as a list of strings, normalizing the JSON string-or-array
+///  form per RFC 7519 §4.1.3. Returns `None` if `aud` is absent or not a string
+///  / array of strings.
+pub fn JwtClaims::get_audiences(self : JwtClaims) -> Array[String]? {
+  match self.data.get("aud") {
+    Some(String(s)) => Some([s])
+    Some(Array(arr)) => {
+      let out : Array[String] = []
+      for v in arr {
+        match v {
+          String(s) => out.push(s)
+          _ => return None
+        }
+      }
+      Some(out)
+    }
+    _ => None
+  }
+}
+
+///|
+/// Parse a decimal integer string into Int64, or `None` if it is not a valid
+/// in-range decimal.  Used to recover exact integer JSON numbers from `repr`.
+fn parse_i64_decimal(s : String) -> Int64? {
+  if s.length() == 0 {
+    return None
+  }
+  let mut i = 0
+  let mut neg = false
+  if s[0] == '-' {
+    neg = true
+    i = 1
+    if s.length() == 1 {
+      return None
+    }
+  }
+  let mut acc = 0L
+  for j = i; j < s.length(); j = j + 1 {
+    let c = s[j]
+    if c < '0' || c > '9' {
+      return None
+    }
+    let d = (c.to_int() - '0').to_int64()
+    // overflow guard: Int64 max = 9223372036854775807
+    if acc > 922_337_203_685_477_580L {
+      return None
+    }
+    if acc == 922_337_203_685_477_580L && d > 7L {
+      return None
+    }
+    acc = acc * 10L + d
+  }
+  if neg {
+    Some(-acc)
+  } else {
+    Some(acc)
+  }
+}
+
+///|
+/// Extract an Int64 from a JSON number, preferring the exact decimal `repr`
+/// when present (preserves precision beyond 2^53 that Double cannot hold).
+fn int64_from_json(json : Json) -> Int64? {
+  match json {
+    Number(n, repr~) =>
+      match repr {
+        Some(r) =>
+          match parse_i64_decimal(r) {
+            Some(v) => Some(v)
+            None => Some(n.to_int64())
+          }
+        None => Some(n.to_int64())
+      }
+    _ => None
+  }
+}
+
+///|
 ///  Registered claim **exp** (expiration time) — Unix timestamp after which the
 ///  JWT MUST NOT be accepted.  Per RFC 7519 §4.1.4.
 pub fn JwtClaims::set_expiration(self : JwtClaims, exp : Int64) -> Unit {
-  self.data.set("exp", Json::number(exp.to_double()))
+  self.data.set("exp", Json::number(exp.to_double(), repr=exp.to_string()))
 }
 
 ///|
 ///  Returns the **exp** (expiration time) value, or `None` if absent.
 pub fn JwtClaims::get_expiration(self : JwtClaims) -> Int64? {
   match self.data.get("exp") {
-    Some(Number(n, ..)) => Some(n.to_int64())
+    Some(v) => int64_from_json(v)
     _ => None
   }
 }
@@ -325,8 +419,24 @@ pub fn JwtClaims::get_expiration(self : JwtClaims) -> Int64? {
 ///  Returns `true` when the current time (UTC) is **past** the **exp** claim.
 ///  Returns `false` if **exp** is not set, so it is **safe** to call on any claims.
 pub fn JwtClaims::is_expired(self : JwtClaims) -> Bool {
+  self.is_expired_with_leeway(0L)
+}
+
+///|
+///  Same as `is_expired` but tolerates a `leeway` (in seconds) of clock skew
+///  between the issuer and the verifier, per RFC 7519 §4.1.4.
+///
+///  A token is considered expired only once `now >= exp + leeway`, i.e. it is
+///  still accepted within `leeway` seconds after the nominal expiration time.
+pub fn JwtClaims::is_expired_with_leeway(
+  self : JwtClaims,
+  leeway : Int64,
+) -> Bool {
   match self.get_expiration() {
-    Some(exp) => (@env.now() / 1000).reinterpret_as_int64() >= exp
+    Some(exp) => {
+      let now_s = (@env.now() / 1000).reinterpret_as_int64()
+      now_s >= exp + leeway
+    }
     None => false
   }
 }
@@ -339,13 +449,26 @@ pub fn JwtClaims::is_expired(self : JwtClaims) -> Bool {
 ///  - **nbf** is absent OR `now >= nbf`
 ///  - **exp** is absent OR `now < exp`
 pub fn JwtClaims::is_now_valid(self : JwtClaims) -> Bool {
+  self.is_now_valid_with_leeway(0L)
+}
+
+///|
+///  Same as `is_now_valid` but tolerates a `leeway` (in seconds) of clock skew
+///  between the issuer and the verifier, per RFC 7519 §4.1.4/§4.1.5.
+///
+///  nbf is satisfied once `now >= nbf - leeway` (accept slightly early); exp is
+///  satisfied while `now < exp + leeway` (accept slightly late).
+pub fn JwtClaims::is_now_valid_with_leeway(
+  self : JwtClaims,
+  leeway : Int64,
+) -> Bool {
   let now_s = (@env.now() / 1000).reinterpret_as_int64()
   match self.get_not_before() {
-    Some(nbf) => if now_s < nbf { return false }
+    Some(nbf) => if now_s < nbf - leeway { return false }
     None => ()
   }
   match self.get_expiration() {
-    Some(exp) => if now_s >= exp { return false }
+    Some(exp) => if now_s >= exp + leeway { return false }
     None => ()
   }
   true
@@ -355,14 +478,14 @@ pub fn JwtClaims::is_now_valid(self : JwtClaims) -> Bool {
 ///  Registered claim **nbf** (not before) — Unix timestamp before which the JWT
 ///  MUST NOT be accepted.  Per RFC 7519 §4.1.5.
 pub fn JwtClaims::set_not_before(self : JwtClaims, nbf : Int64) -> Unit {
-  self.data.set("nbf", Json::number(nbf.to_double()))
+  self.data.set("nbf", Json::number(nbf.to_double(), repr=nbf.to_string()))
 }
 
 ///|
 ///  Returns the **nbf** (not before) value, or `None` if absent.
 pub fn JwtClaims::get_not_before(self : JwtClaims) -> Int64? {
   match self.data.get("nbf") {
-    Some(Number(n, ..)) => Some(n.to_int64())
+    Some(v) => int64_from_json(v)
     _ => None
   }
 }
@@ -371,14 +494,14 @@ pub fn JwtClaims::get_not_before(self : JwtClaims) -> Int64? {
 ///  Registered claim **iat** (issued at) — Unix timestamp when the JWT was
 ///  created.  Per RFC 7519 §4.1.6.
 pub fn JwtClaims::set_issued_at(self : JwtClaims, iat : Int64) -> Unit {
-  self.data.set("iat", Json::number(iat.to_double()))
+  self.data.set("iat", Json::number(iat.to_double(), repr=iat.to_string()))
 }
 
 ///|
 ///  Returns the **iat** (issued at) value, or `None` if absent.
 pub fn JwtClaims::get_issued_at(self : JwtClaims) -> Int64? {
   match self.data.get("iat") {
-    Some(Number(n, ..)) => Some(n.to_int64())
+    Some(v) => int64_from_json(v)
     _ => None
   }
 }
@@ -405,10 +528,10 @@ fn JwtClaims::to_json(self : JwtClaims) -> Json {
 }
 
 ///|
-fn JwtClaims::from_json(json : Json) -> JwtClaims {
+fn JwtClaims::from_json(json : Json) -> JwtClaims raise JwtError {
   let data = match json {
     Object(o) => o
-    _ => Map([], capacity=0)
+    _ => raise InvalidJson("claims must be a JSON object")
   }
   { data, }
 }
@@ -446,20 +569,15 @@ fn split_by_char(s : String, delim : Char) -> Array[String] {
 
 ///|
 fn base64url_encode(input : BytesView) -> String {
-  let raw = @base64.encode(input, url_safe=true)
-  let chars = raw.to_array()
-  let mut n = chars.length()
-  for i = chars.length() - 1; i >= 0; i = i - 1 {
-    if chars[i] == '=' {
-      n = i
-    } else {
-      break
-    }
-  }
   let out = StringBuilder::new()
-  for i = 0; i < n; i = i + 1 {
-    out.write_char(chars[i])
-  }
+  // Note: this base64 Encoder's `padding=false` drops the final *partial
+  // character* (not just the '='), so we request padding and skip '=' here.
+  @base64.Encoder::new().encode_to(
+    input,
+    fn(c : Char) { if c != '=' { out.write_char(c) } },
+    url_safe=true,
+    padding=true,
+  )
   out.to_string()
 }
 
@@ -483,12 +601,15 @@ fn split_token(sv : StringView) -> (String, String, String) raise JwtError {
 }
 
 ///|
-fn decode_json_str(data : Bytes) -> (String, Json) raise JwtError {
+fn decode_json(data : Bytes) -> Json raise JwtError {
   let s = @encoding.decoder(UTF8).decode(data.view(), stream=false) catch {
     _ => raise InvalidUtf8("invalid UTF-8")
   }
-  let j = @json5.parse(s) catch { _ => raise InvalidJson("parse error") }
-  (s, j)
+  // Use the strict core JSON parser: unlike json5 it preserves the exact
+  // numeric `repr` string, so Int64 claims > 2^53 survive a round-trip.
+  @json.parse(s.view()) catch {
+    _ => raise InvalidJson("parse error")
+  }
 }
 
 // =============================================================================
@@ -530,10 +651,13 @@ pub fn[V : JwtVerifier] decode_with(
   sv : StringView,
 ) -> JwtToken raise JwtError {
   let (hdr_b64, pay_b64, sig_b64) = split_token(sv)
-  let hdr = JwtHeader::from_json(decode_json_str(base64url_decode(hdr_b64)).1)
-  let claims = JwtClaims::from_json(
-    decode_json_str(base64url_decode(pay_b64)).1,
-  )
+  let hdr = JwtHeader::from_json(decode_json(base64url_decode(hdr_b64)))
+  // Reject tokens whose header `alg` does not match the verifier's algorithm.
+  // This prevents algorithm-confusion / downgrade attacks (RFC 7515 §4.1.1).
+  if hdr.alg != verifier.alg_name() {
+    raise UnsupportedAlgorithm(hdr.alg)
+  }
+  let claims = JwtClaims::from_json(decode_json(base64url_decode(pay_b64)))
   let input = string_to_bytes(hdr_b64 + "." + pay_b64)
   let sig = base64url_decode(sig_b64)
   if !verifier.verify(input.view(), sig.view()) {
@@ -562,10 +686,8 @@ pub fn decode(sv : StringView, secret : String) -> JwtToken raise JwtError {
 /// Decode **without** signature verification. Use for inspecting tokens only.
 pub fn decode_without_verify(sv : StringView) -> JwtToken raise JwtError {
   let (hdr_b64, pay_b64, sig_b64) = split_token(sv)
-  let hdr = JwtHeader::from_json(decode_json_str(base64url_decode(hdr_b64)).1)
-  let claims = JwtClaims::from_json(
-    decode_json_str(base64url_decode(pay_b64)).1,
-  )
+  let hdr = JwtHeader::from_json(decode_json(base64url_decode(hdr_b64)))
+  let claims = JwtClaims::from_json(decode_json(base64url_decode(pay_b64)))
   { header: hdr, claims, signature: base64url_decode(sig_b64).to_fixedarray() }
 }
 
@@ -574,6 +696,12 @@ pub fn decode_without_verify(sv : StringView) -> JwtToken raise JwtError {
 pub fn verify(sv : StringView, secret : String) -> Bool {
   let v = HmacVerifier::new("HS256", secret) catch { _ => return false }
   let (hdr_b64, pay_b64, sig_b64) = split_token(sv) catch { _ => return false }
+  let hdr = JwtHeader::from_json(decode_json(base64url_decode(hdr_b64))) catch {
+    _ => return false
+  }
+  if hdr.alg != "HS256" {
+    return false
+  }
   let input = string_to_bytes(hdr_b64 + "." + pay_b64)
   let sig = base64url_decode(sig_b64) catch { _ => return false }
   v.verify(input.view(), sig.view())

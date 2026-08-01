@@ -2,9 +2,7 @@
 package "RabitLogic/mjwt"
 
 import {
-  "moonbitlang/core/bigint",
   "moonbitlang/core/debug",
-  "moonbitlang/x/crypto",
 }
 
 // Values
@@ -18,14 +16,10 @@ pub fn encode(JwtClaims, String) -> String raise JwtError
 
 pub fn[S : JwtSigner] encode_with(S, JwtClaims) -> String raise JwtError
 
-pub fn sha384(BytesView) -> FixedArray[Byte]
-
-pub fn sha512(BytesView) -> FixedArray[Byte]
-
 pub fn verify(StringView, String) -> Bool
 
 // Errors
-pub suberror JwtError {
+pub(all) suberror JwtError {
   InvalidFormat(String)
   InvalidBase64(String)
   InvalidJson(String)
@@ -37,30 +31,10 @@ pub suberror JwtError {
 } derive(Eq, @debug.Debug)
 pub fn JwtError::equal(Self, Self) -> Bool
 pub fn JwtError::not_equal(Self, Self) -> Bool
-#as_free_fn
 pub fn JwtError::to_repr(Self) -> @debug.Repr
 pub fn JwtError::to_string(Self) -> String
 
 // Types and methods
-pub struct EcSigner {
-  private_key : Scalar256
-  public_key_x : Scalar256
-  public_key_y : Scalar256
-}
-pub fn EcSigner::alg_name(Self) -> String
-pub fn EcSigner::new_p256(BytesView, BytesView) -> Self raise JwtError
-pub fn EcSigner::sign(Self, BytesView) -> FixedArray[Byte] raise JwtError
-pub impl JwtSigner for EcSigner
-
-pub struct EcVerifier {
-  public_key_x : Scalar256
-  public_key_y : Scalar256
-}
-pub fn EcVerifier::alg_name(Self) -> String
-pub fn EcVerifier::new_p256(BytesView) -> Self raise JwtError
-pub fn EcVerifier::verify(Self, BytesView, BytesView) -> Bool
-pub impl JwtVerifier for EcVerifier
-
 pub struct HmacSigner {
   alg_name : String
   key : Bytes
@@ -84,6 +58,7 @@ pub(all) struct JwtClaims {
 }
 pub fn JwtClaims::get(Self, String) -> Json?
 pub fn JwtClaims::get_audience(Self) -> String?
+pub fn JwtClaims::get_audiences(Self) -> Array[String]?
 pub fn JwtClaims::get_expiration(Self) -> Int64?
 pub fn JwtClaims::get_issued_at(Self) -> Int64?
 pub fn JwtClaims::get_issuer(Self) -> String?
@@ -91,10 +66,13 @@ pub fn JwtClaims::get_jwt_id(Self) -> String?
 pub fn JwtClaims::get_not_before(Self) -> Int64?
 pub fn JwtClaims::get_subject(Self) -> String?
 pub fn JwtClaims::is_expired(Self) -> Bool
+pub fn JwtClaims::is_expired_with_leeway(Self, Int64) -> Bool
 pub fn JwtClaims::is_now_valid(Self) -> Bool
+pub fn JwtClaims::is_now_valid_with_leeway(Self, Int64) -> Bool
 pub fn JwtClaims::new() -> Self
 pub fn JwtClaims::set(Self, String, Json) -> Unit
 pub fn JwtClaims::set_audience(Self, String) -> Unit
+pub fn JwtClaims::set_audiences(Self, Array[String]) -> Unit
 pub fn JwtClaims::set_expiration(Self, Int64) -> Unit
 pub fn JwtClaims::set_issued_at(Self, Int64) -> Unit
 pub fn JwtClaims::set_issuer(Self, String) -> Unit
@@ -114,60 +92,6 @@ pub(all) struct JwtToken {
   claims : JwtClaims
   signature : FixedArray[Byte]
 }
-
-pub struct RsaSigner {
-  n : @bigint.BigInt
-  d : @bigint.BigInt
-  hash_len : Int
-  alg : String
-}
-pub fn RsaSigner::alg_name(Self) -> String
-pub fn RsaSigner::new(BytesView, BytesView, String) -> Self raise JwtError
-pub fn RsaSigner::sign(Self, BytesView) -> FixedArray[Byte] raise JwtError
-pub impl JwtSigner for RsaSigner
-
-pub struct RsaVerifier {
-  n : @bigint.BigInt
-  e : @bigint.BigInt
-  hash_len : Int
-  alg : String
-}
-pub fn RsaVerifier::alg_name(Self) -> String
-pub fn RsaVerifier::new(BytesView, BytesView, String) -> Self raise JwtError
-pub fn RsaVerifier::verify(Self, BytesView, BytesView) -> Bool
-pub impl JwtVerifier for RsaVerifier
-
-pub struct Scalar256 {
-  limbs : FixedArray[UInt64]
-}
-pub fn Scalar256::from_bytes(BytesView) -> Self
-pub fn Scalar256::one() -> Self
-pub fn Scalar256::to_bytes(Self) -> FixedArray[Byte]
-pub fn Scalar256::zero() -> Self
-
-pub struct Sha384 {
-  ctx : Sha512Ctx
-}
-pub fn Sha384::block_size(Self) -> Int
-pub fn Sha384::finalize_into(Self, FixedArray[Byte], offset~ : Int) -> Unit
-pub fn Sha384::new() -> Self
-pub fn Sha384::reset(Self) -> Unit
-pub fn Sha384::size(Self) -> Int
-pub fn Sha384::update(Self, BytesView) -> Unit
-pub impl @crypto.CryptoHasher for Sha384
-
-pub struct Sha512 {
-  ctx : Sha512Ctx
-}
-pub fn Sha512::block_size(Self) -> Int
-pub fn Sha512::finalize_into(Self, FixedArray[Byte], offset~ : Int) -> Unit
-pub fn Sha512::new() -> Self
-pub fn Sha512::reset(Self) -> Unit
-pub fn Sha512::size(Self) -> Int
-pub fn Sha512::update(Self, BytesView) -> Unit
-pub impl @crypto.CryptoHasher for Sha512
-
-type Sha512Ctx
 
 // Type aliases
 

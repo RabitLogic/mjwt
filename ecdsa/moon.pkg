@@ -1,0 +1,12 @@
+import {
+  "RabitLogic/mjwt",
+  "moonbitlang/x/crypto",
+  "moonbitlang/core/bigint",
+  "moonbitlang/core/test",
+}
+
+import {
+  "RabitLogic/mjwt",
+  "moonbitlang/core/test",
+  "moonbitlang/core/bench",
+} for "test"

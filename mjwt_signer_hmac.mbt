@@ -69,8 +69,8 @@ pub impl JwtSigner for HmacSigner with fn sign(
 ) -> FixedArray[Byte] raise JwtError {
   match self.alg_name {
     "HS256" => @crypto.hmac(@crypto.SHA256::new(), self.key.view(), message)
-    "HS384" => @crypto.hmac(Sha384::new(), self.key.view(), message)
-    "HS512" => @crypto.hmac(Sha512::new(), self.key.view(), message)
+    "HS384" => @crypto.hmac(@hash.Sha384::new(), self.key.view(), message)
+    "HS512" => @crypto.hmac(@hash.Sha512::new(), self.key.view(), message)
     _ => raise UnsupportedAlgorithm(self.alg_name)
   }
 }
@@ -115,19 +115,20 @@ pub impl JwtVerifier for HmacVerifier with fn verify(
 ) -> Bool {
   let expected = match self.alg_name {
     "HS256" => @crypto.hmac(@crypto.SHA256::new(), self.key.view(), message)
-    "HS384" => @crypto.hmac(Sha384::new(), self.key.view(), message)
-    "HS512" => @crypto.hmac(Sha512::new(), self.key.view(), message)
+    "HS384" => @crypto.hmac(@hash.Sha384::new(), self.key.view(), message)
+    "HS512" => @crypto.hmac(@hash.Sha512::new(), self.key.view(), message)
     _ => return false
   }
   if signature.length() != expected.length() {
     return false
   }
+  // Constant-time comparison: XOR-accumulate over all bytes, no early exit,
+  // to avoid leaking the mismatch position through timing.
+  let mut diff = 0
   for i = 0; i < signature.length(); i = i + 1 {
-    if signature[i] != expected[i] {
-      return false
-    }
+    diff = diff | (signature[i] ^ expected[i]).to_int()
   }
-  true
+  diff == 0
 }
 
 ///|
